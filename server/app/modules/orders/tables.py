@@ -1,13 +1,16 @@
 from __future__ import annotations
 
 from sqlalchemy import JSON, Column, DateTime, ForeignKey, MetaData, Numeric, String, Table
+from sqlalchemy.dialects.postgresql import UUID
+
+guid_type = String(36).with_variant(UUID(as_uuid=False), "postgresql")
 
 metadata = MetaData()
 
 users = Table(
     "users",
     metadata,
-    Column("id", String(36), primary_key=True),
+    Column("id", guid_type, primary_key=True),
     Column("email", String(255), nullable=False, unique=True),
     Column("full_name", String(255), nullable=False),
     Column("password_hash", String(255), nullable=False),
@@ -20,8 +23,8 @@ users = Table(
 broker_accounts = Table(
     "broker_accounts",
     metadata,
-    Column("id", String(36), primary_key=True),
-    Column("user_id", String(36), ForeignKey("users.id"), nullable=False),
+    Column("id", guid_type, primary_key=True),
+    Column("user_id", guid_type, ForeignKey("users.id"), nullable=False),
     Column("broker_name", String(50), nullable=False),
     Column("broker_account_no", String(100), nullable=False, unique=True),
     Column("external_account_id", String(100), nullable=False, unique=True),
@@ -34,8 +37,8 @@ broker_accounts = Table(
 orders = Table(
     "orders",
     metadata,
-    Column("id", String(36), primary_key=True),
-    Column("broker_account_id", String(36), ForeignKey("broker_accounts.id"), nullable=False),
+    Column("id", guid_type, primary_key=True),
+    Column("broker_account_id", guid_type, ForeignKey("broker_accounts.id"), nullable=False),
     Column("client_order_id", String(100), nullable=False, unique=True),
     Column("broker_order_id", String(100), nullable=True, unique=True),
     Column("symbol", String(32), nullable=False),
@@ -53,8 +56,8 @@ orders = Table(
 executions = Table(
     "executions",
     metadata,
-    Column("id", String(36), primary_key=True),
-    Column("order_id", String(36), ForeignKey("orders.id"), nullable=False),
+    Column("id", guid_type, primary_key=True),
+    Column("order_id", guid_type, ForeignKey("orders.id"), nullable=False),
     Column("broker_execution_id", String(100), nullable=False, unique=True),
     Column("filled_quantity", Numeric(18, 6), nullable=False),
     Column("filled_price", Numeric(18, 4), nullable=False),
@@ -65,8 +68,8 @@ executions = Table(
 audit_logs = Table(
     "audit_logs",
     metadata,
-    Column("id", String(36), primary_key=True),
-    Column("user_id", String(36), ForeignKey("users.id"), nullable=False),
+    Column("id", guid_type, primary_key=True),
+    Column("user_id", guid_type, ForeignKey("users.id"), nullable=False),
     Column("resource_type", String(50), nullable=False),
     Column("resource_id", String(100), nullable=False),
     Column("action", String(50), nullable=False),

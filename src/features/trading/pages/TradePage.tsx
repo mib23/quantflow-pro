@@ -16,13 +16,13 @@ export function TradePage() {
   const quoteQuery = useTradingQuoteQuery(activeSymbol);
   const cancelOrderMutation = useCancelTradingOrderMutation();
 
-  useTradingRealtime(activeSymbol, account?.id ?? null);
-
   const account = accountQuery.data?.account ?? null;
   const positions = accountQuery.data?.positions ?? [];
   const quote = quoteQuery.data ?? null;
   const referencePrice = quote?.last ?? quote?.ask ?? quote?.bid ?? null;
   const quoteSpread = quote?.ask != null && quote?.bid != null ? quote.ask - quote.bid : null;
+
+  useTradingRealtime(activeSymbol, account?.id ?? null);
 
   return (
     <div className="space-y-6">

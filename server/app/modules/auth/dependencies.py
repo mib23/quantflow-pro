@@ -1,12 +1,12 @@
 from __future__ import annotations
 
-import os
 from functools import lru_cache
 from typing import Annotated
 
 from fastapi import Depends, Request
 
 from app.core.exceptions import ApiException
+from app.core.settings import get_settings
 
 from .repository import UserRepository
 from .security import TokenError
@@ -15,26 +15,22 @@ from .session_store import RedisSessionStore
 
 
 def get_auth_config() -> AuthConfig:
+    settings = get_settings()
     return AuthConfig(
-        jwt_secret=os.getenv("QF_JWT_SECRET", "quantflow-dev-auth-secret"),
-        access_token_ttl_minutes=int(os.getenv("QF_ACCESS_TOKEN_TTL_MINUTES", "15")),
-        refresh_token_ttl_days=int(os.getenv("QF_REFRESH_TOKEN_TTL_DAYS", "30")),
+        jwt_secret=settings.jwt_secret,
+        access_token_ttl_minutes=settings.access_token_ttl_minutes,
+        refresh_token_ttl_days=settings.refresh_token_ttl_days,
     )
 
 
 @lru_cache(maxsize=1)
 def get_auth_repository() -> UserRepository:
-    database_url = os.getenv(
-        "QF_DATABASE_URL",
-        "postgresql+psycopg://quantflow:quantflow@localhost:5432/quantflow",
-    )
-    return UserRepository.from_database_url(database_url)
+    return UserRepository.from_database_url(get_settings().database_url)
 
 
 @lru_cache(maxsize=1)
 def get_auth_session_store() -> RedisSessionStore:
-    redis_url = os.getenv("QF_REDIS_URL", "redis://localhost:6379/0")
-    return RedisSessionStore(redis_url)
+    return RedisSessionStore(get_settings().redis_url)
 
 
 @lru_cache(maxsize=1)
