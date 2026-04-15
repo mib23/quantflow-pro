@@ -83,6 +83,12 @@ type QuoteResponse = {
   timestamp: string;
 };
 
+type TradingApiErrorInfo = {
+  code: string | null;
+  message: string | null;
+  details: Record<string, unknown>;
+};
+
 export type PlaceOrderInput = {
   brokerAccountId: string;
   symbol: string;
@@ -92,6 +98,41 @@ export type PlaceOrderInput = {
   limitPrice?: number | null;
   timeInForce: string;
   idempotencyKey: string;
+};
+
+export type TradingPreTradeRiskCheckInput = Omit<PlaceOrderInput, "idempotencyKey">;
+
+export type TradingPreTradeRiskCheckResult = {
+  allowed: boolean;
+  decision: "ALLOW" | "REJECT";
+  reasonCode: string | null;
+  reason: string | null;
+  message: string;
+  ruleId: string | null;
+  eventId: string | null;
+  severity: string | null;
+  checkedAt: string;
+  symbol: string;
+  side: Order["side"];
+  orderType: PlaceOrderInput["orderType"];
+  quantity: number;
+  limitPrice: number | null;
+  accountId: string | null;
+  raw: Record<string, unknown>;
+};
+
+export type TradingRiskEvent = {
+  id: string;
+  accountId: string;
+  ruleId: string | null;
+  orderId: string | null;
+  clientOrderId: string | null;
+  severity: string;
+  status: string | null;
+  reasonCode: string | null;
+  message: string;
+  occurredAt: string;
+  raw: Record<string, unknown>;
 };
 
 type PlaceOrderResponse = {
@@ -104,6 +145,227 @@ type CancelOrderResponse = {
   client_order_id: string;
   status: string;
 };
+
+function asRecord(value: unknown): Record<string, unknown> | null {
+  return typeof value === "object" && value !== null ? (value as Record<string, unknown>) : null;
+}
+
+function readString(record: Record<string, unknown>, keys: string[]): string | null {
+  for (const key of keys) {
+    const value = record[key];
+
+    if (typeof value === "string" && value.trim().length > 0) {
+      return value;
+    }
+  }
+
+  return null;
+}
+
+function readBoolean(record: Record<string, unknown>, keys: string[]): boolean | null {
+  for (const key of keys) {
+    const value = record[key];
+
+    if (typeof value === "boolean") {
+      return value;
+    }
+  }
+
+  return null;
+}
+
+function readNumber(record: Record<string, unknown>, keys: string[]): number | null {
+  for (const key of keys) {
+    const value = record[key];
+
+    if (typeof value === "number" && Number.isFinite(value)) {
+      return value;
+    }
+  }
+
+  return null;
+}
+
+function normalizeDecision(record: Record<string, unknown>): "ALLOW" | "REJECT" {
+  const allowed = readBoolean(record, ["allowed", "approved", "passed", "pass", "ok", "success"]);
+
+  if (allowed === true) {
+    return "ALLOW";
+  }
+
+  if (allowed === false) {
+    return "REJECT";
+  }
+
+  const decision = readString(record, ["decision", "status", "result", "state"])?.toLowerCase();
+
+  if (decision && ["allow", "allowed", "approve", "approved", "pass", "passed", "ok", "success"].includes(decision)) {
+    return "ALLOW";
+  }
+
+  return "REJECT";
+}
+
+function buildRiskReasonMessage(input: {
+  code?: string | null;
+  reason?: string | null;
+  message?: string | null;
+  details?: Record<string, unknown> | null;
+  fallback: string;
+}): string {
+  const source = [input.code, input.reason, input.message, input.details ? JSON.stringify(input.details) : null]
+    .filter((value): value is string => typeof value === "string" && value.trim().length > 0)
+    .join(" ")
+    .toLowerCase();
+
+  if (source.includes("daily_loss") || source.includes("day_loss")) {
+    return "今日亏损已触发风控限制";
+  }
+
+  if (source.includes("single_order") || source.includes("order_value") || source.includes("notional")) {
+    return "单笔订单金额超过风控上限";
+  }
+
+  if (source.includes("position_size") || source.includes("exposure")) {
+    return "仓位规模超过风控限制";
+  }
+
+  if (source.includes("restricted_symbol") || source.includes("restricted_symbols") || source.includes("symbol_blacklist")) {
+    return "该标的已被风控限制";
+  }
+
+  if (source.includes("market_hours") || source.includes("trading_hours")) {
+    return "当前不在允许交易时段";
+  }
+
+  if (source.includes("buying_power") || source.includes("insufficient_funds")) {
+    return "可用购买力不足，订单被拒绝";
+  }
+
+  if (input.reason) {
+    return input.reason;
+  }
+
+  if (input.message) {
+    return input.message;
+  }
+
+  return input.fallback;
+}
+
+function normalizeApiErrorInfo(error: unknown): TradingApiErrorInfo | null {
+  if (!isAxiosError(error)) {
+    return null;
+  }
+
+  const record = asRecord(error.response?.data);
+
+  if (!record) {
+    return {
+      code: null,
+      message: error.message,
+      details: {},
+    };
+  }
+
+  const envelopeError = asRecord(record.error);
+  const payload = asRecord(record.data) ?? record;
+  const details = asRecord(payload.details) ?? asRecord(envelopeError?.details) ?? {};
+
+  return {
+    code: readString(envelopeError ?? payload, ["code", "error_code", "reason_code", "reasonCode"]),
+    message: readString(envelopeError ?? payload, ["message", "detail", "reason"]) ?? error.message,
+    details,
+  };
+}
+
+function normalizePreTradeRiskCheckResponse(
+  input: unknown,
+  fallbackInput: TradingPreTradeRiskCheckInput,
+): TradingPreTradeRiskCheckResult {
+  const record = asRecord(input) ?? {};
+  const details = asRecord(record.details) ?? {};
+  const allowed = normalizeDecision(record) === "ALLOW";
+  const reasonCode = readString(record, ["reason_code", "reasonCode", "code"]);
+  const reason = readString(record, ["reason", "rejection_reason", "rejectionReason"]);
+  const message = buildRiskReasonMessage({
+    code: reasonCode,
+    reason,
+    message: readString(record, ["message", "detail"]),
+    details,
+    fallback: allowed ? "风控预检通过" : "风控预检未通过",
+  });
+
+  return {
+    allowed,
+    decision: allowed ? "ALLOW" : "REJECT",
+    reasonCode,
+    reason,
+    message,
+    ruleId: readString(record, ["rule_id", "ruleId"]),
+    eventId: readString(record, ["event_id", "eventId"]),
+    severity: readString(record, ["severity"]),
+    checkedAt: readString(record, ["checked_at", "checkedAt", "timestamp"]) ?? new Date().toISOString(),
+    symbol: readString(record, ["symbol"]) ?? fallbackInput.symbol.toUpperCase(),
+    side: (readString(record, ["side"])?.toUpperCase() as Order["side"] | undefined) ?? fallbackInput.side,
+    orderType:
+      (readString(record, ["order_type", "orderType"])?.toUpperCase() as PlaceOrderInput["orderType"] | undefined) ??
+      fallbackInput.orderType,
+    quantity: readNumber(record, ["quantity"]) ?? fallbackInput.quantity,
+    limitPrice: readNumber(record, ["limit_price", "limitPrice"]) ?? (fallbackInput.limitPrice != null ? fallbackInput.limitPrice : null),
+    accountId: readString(record, ["account_id", "accountId"]) ?? fallbackInput.brokerAccountId,
+    raw: record,
+  };
+}
+
+export function normalizeRiskEvent(recordInput: unknown, fallbackAccountId?: string | null): TradingRiskEvent | null {
+  const record = asRecord(recordInput);
+
+  if (!record) {
+    return null;
+  }
+
+  const accountId = readString(record, ["account_id", "accountId"]) ?? fallbackAccountId ?? "";
+
+  if (!accountId) {
+    return null;
+  }
+
+  const reasonCode = readString(record, ["reason_code", "reasonCode", "code"]);
+  const severity = readString(record, ["severity"]) ?? "INFO";
+  const message = buildRiskReasonMessage({
+    code: reasonCode,
+    reason: readString(record, ["reason", "rejection_reason", "rejectionReason"]),
+    message: readString(record, ["message", "detail"]),
+    details: asRecord(record.details),
+    fallback: "已收到风险事件",
+  });
+
+  return {
+    id: readString(record, ["id", "event_id", "eventId"]) ?? `risk_${Date.now()}`,
+    accountId,
+    ruleId: readString(record, ["rule_id", "ruleId"]),
+    orderId: readString(record, ["order_id", "orderId"]),
+    clientOrderId: readString(record, ["client_order_id", "clientOrderId"]),
+    severity,
+    status: readString(record, ["status"]),
+    reasonCode,
+    message,
+    occurredAt: readString(record, ["occurred_at", "occurredAt", "timestamp"]) ?? new Date().toISOString(),
+    raw: record,
+  };
+}
+
+function createTradingApiError(
+  message: string,
+  code?: string | null,
+  details?: Record<string, unknown>,
+): Error & { code?: string | null; details?: Record<string, unknown> } {
+  const error = new Error(message) as Error & { code?: string | null; details?: Record<string, unknown> };
+  error.code = code ?? null;
+  error.details = details ?? {};
+  return error;
+}
 
 function mapAccount(input: AccountsOverviewResponse["account"]): AccountOverview {
   return {
@@ -250,8 +512,10 @@ export async function getTradingQuote(symbol: string): Promise<TradingQuote> {
   return mapQuote(response.data.data);
 }
 
-export async function placeTradingOrder(input: PlaceOrderInput): Promise<{ clientOrderId: string; status: TradingOrderStatus }> {
-  const response = await httpClient.post<ApiEnvelope<PlaceOrderResponse>>("/orders", {
+export async function checkTradingPreTradeRisk(
+  input: TradingPreTradeRiskCheckInput,
+): Promise<TradingPreTradeRiskCheckResult> {
+  const payload = {
     broker_account_id: input.brokerAccountId,
     symbol: input.symbol,
     side: input.side,
@@ -259,13 +523,85 @@ export async function placeTradingOrder(input: PlaceOrderInput): Promise<{ clien
     quantity: input.quantity,
     limit_price: input.limitPrice,
     time_in_force: input.timeInForce,
-    idempotency_key: input.idempotencyKey,
-  });
-
-  return {
-    clientOrderId: response.data.data.client_order_id,
-    status: normalizeTradingOrderStatus(response.data.data.status),
   };
+
+  try {
+    const response = await httpClient.post<ApiEnvelope<unknown>>("/risk/checks/pre-trade", payload);
+    return normalizePreTradeRiskCheckResponse(response.data.data, input);
+  } catch (error) {
+    const apiError = normalizeApiErrorInfo(error);
+
+    if (apiError && apiError.code && ["PRE_TRADE_RISK_REJECTED", "ORDER_RISK_REJECTED", "RISK_REJECTED"].includes(apiError.code)) {
+      return {
+        allowed: false,
+        decision: "REJECT",
+        reasonCode: apiError.code,
+        reason: readString(apiError.details, ["reason", "rejection_reason", "rejectionReason"]),
+        message: buildRiskReasonMessage({
+          code: apiError.code,
+          reason: readString(apiError.details, ["reason", "rejection_reason", "rejectionReason"]),
+          message: apiError.message,
+          details: apiError.details,
+          fallback: "风控预检未通过",
+        }),
+        ruleId: readString(apiError.details, ["rule_id", "ruleId"]),
+        eventId: readString(apiError.details, ["event_id", "eventId"]),
+        severity: readString(apiError.details, ["severity"]),
+        checkedAt: new Date().toISOString(),
+        symbol: input.symbol.toUpperCase(),
+        side: input.side,
+        orderType: input.orderType,
+        quantity: input.quantity,
+        limitPrice: input.limitPrice != null ? input.limitPrice : null,
+        accountId: input.brokerAccountId,
+        raw: apiError.details,
+      };
+    }
+
+    throw error;
+  }
+}
+
+export async function placeTradingOrder(input: PlaceOrderInput): Promise<{ clientOrderId: string; status: TradingOrderStatus }> {
+  try {
+    const response = await httpClient.post<ApiEnvelope<PlaceOrderResponse>>("/orders", {
+      broker_account_id: input.brokerAccountId,
+      symbol: input.symbol,
+      side: input.side,
+      order_type: input.orderType,
+      quantity: input.quantity,
+      limit_price: input.limitPrice,
+      time_in_force: input.timeInForce,
+      idempotency_key: input.idempotencyKey,
+    });
+
+    return {
+      clientOrderId: response.data.data.client_order_id,
+      status: normalizeTradingOrderStatus(response.data.data.status),
+    };
+  } catch (error) {
+    const apiError = normalizeApiErrorInfo(error);
+
+    if (apiError && apiError.code === "ORDER_RISK_REJECTED") {
+      throw createTradingApiError(
+        buildRiskReasonMessage({
+          code: apiError.code,
+          reason: readString(apiError.details, ["reason", "rejection_reason", "rejectionReason"]),
+          message: apiError.message,
+          details: apiError.details,
+          fallback: "订单被风控拒绝",
+        }),
+        apiError.code,
+        apiError.details,
+      );
+    }
+
+    if (apiError) {
+      throw createTradingApiError(apiError.message ?? "订单提交失败", apiError.code, apiError.details);
+    }
+
+    throw error;
+  }
 }
 
 export async function cancelTradingOrder(clientOrderId: string): Promise<{ clientOrderId: string; status: TradingOrderStatus }> {

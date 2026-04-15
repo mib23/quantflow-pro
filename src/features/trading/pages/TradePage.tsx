@@ -1,7 +1,14 @@
 import { useState } from "react";
 
 import { OrderEntryForm } from "@/features/trading/components/OrderEntryForm";
-import { useCancelTradingOrderMutation, useTradingAccountQuery, useTradingExecutionsQuery, useTradingOrdersQuery, useTradingQuoteQuery } from "@/features/trading/hooks/useTradingQueries";
+import {
+  useCancelTradingOrderMutation,
+  useTradingAccountQuery,
+  useTradingExecutionsQuery,
+  useTradingOrdersQuery,
+  useTradingQuoteQuery,
+  useTradingRiskEventsQuery,
+} from "@/features/trading/hooks/useTradingQueries";
 import { useTradingRealtime } from "@/features/trading/hooks/useTradingRealtime";
 import { formatCurrency, formatNumber } from "@/shared/lib/format";
 import { DataState } from "@/shared/ui/DataState";
@@ -21,6 +28,7 @@ export function TradePage() {
   const quote = quoteQuery.data ?? null;
   const referencePrice = quote?.last ?? quote?.ask ?? quote?.bid ?? null;
   const quoteSpread = quote?.ask != null && quote?.bid != null ? quote.ask - quote.bid : null;
+  const riskEventsQuery = useTradingRiskEventsQuery(account?.id ?? null);
 
   useTradingRealtime(activeSymbol, account?.id ?? null);
 
@@ -76,6 +84,32 @@ export function TradePage() {
               disabled={accountQuery.isPending || accountQuery.isError}
               onSymbolChange={setActiveSymbol}
             />
+          </SectionCard>
+
+          <SectionCard title="Risk Feed" subtitle="实时订阅 risk.events.<account_id>，最近事件会缓存并可复用。">
+            <div className="space-y-3">
+              {riskEventsQuery.data.length > 0 ? (
+                riskEventsQuery.data.slice(0, 5).map((event) => (
+                  <div key={event.id} className="rounded-2xl border border-slate-800 bg-ink-950 p-4">
+                    <div className="flex items-start justify-between gap-4">
+                      <div>
+                        <p className="text-sm font-semibold text-white">{event.message}</p>
+                        <p className="mt-2 text-xs text-slate-500">
+                          {event.ruleId ? `Rule ${event.ruleId} · ` : ""}
+                          {event.reasonCode ? `Code ${event.reasonCode}` : "No code"}
+                        </p>
+                      </div>
+                      <span className={`rounded-full border px-3 py-1 text-xs uppercase tracking-[0.18em] ${getRiskSeverityTone(event.severity)}`}>
+                        {event.severity}
+                      </span>
+                    </div>
+                    <p className="mt-3 text-xs text-slate-500">{event.occurredAt}</p>
+                  </div>
+                ))
+              ) : (
+                <p className="text-sm text-slate-500">暂无风险事件，等待实时通道推送。</p>
+              )}
+            </div>
           </SectionCard>
         </div>
 
@@ -237,4 +271,18 @@ function getOrderStatusTone(status: string) {
   }
 
   return "text-cyan-300";
+}
+
+function getRiskSeverityTone(severity: string) {
+  const normalized = severity.toUpperCase();
+
+  if (normalized.includes("HIGH") || normalized.includes("CRITICAL")) {
+    return "border-rose-900/40 bg-rose-950/30 text-rose-300";
+  }
+
+  if (normalized.includes("MEDIUM")) {
+    return "border-amber-900/40 bg-amber-950/30 text-amber-300";
+  }
+
+  return "border-cyan-900/40 bg-cyan-950/30 text-cyan-300";
 }

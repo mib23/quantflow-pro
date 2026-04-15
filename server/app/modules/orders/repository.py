@@ -10,6 +10,7 @@ from sqlalchemy.engine import RowMapping
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
+from app.core.ids import coerce_uuid, sqlite_guid, uuid_str
 from app.modules.orders.schemas import ExecutionItem, OrderItem
 from app.modules.orders.status import normalize_order_status
 from app.modules.orders.tables import audit_logs, broker_accounts, executions, orders
@@ -21,16 +22,18 @@ class OrderRepository:
 
     def list_orders(self, page: int, page_size: int, user_id: str | None = None) -> tuple[list[OrderItem], int]:
         offset = (page - 1) * page_size
+        dialect_name = self._dialect_name()
         base_query = select(orders)
         count_query = select(func.count()).select_from(orders)
         if user_id is not None:
+            user_id_value = self._guid_storage_value(user_id, dialect_name=dialect_name)
             base_query = base_query.join(broker_accounts, broker_accounts.c.id == orders.c.broker_account_id).where(
-                broker_accounts.c.user_id == user_id
+                broker_accounts.c.user_id == user_id_value
             )
             count_query = (
                 select(func.count())
                 .select_from(orders.join(broker_accounts, broker_accounts.c.id == orders.c.broker_account_id))
-                .where(broker_accounts.c.user_id == user_id)
+                .where(broker_accounts.c.user_id == user_id_value)
             )
         with self._session_factory() as session:
             total = session.scalar(count_query) or 0
@@ -41,13 +44,15 @@ class OrderRepository:
 
     def list_executions(self, page: int, page_size: int, user_id: str | None = None) -> tuple[list[ExecutionItem], int]:
         offset = (page - 1) * page_size
+        dialect_name = self._dialect_name()
         from_clause = executions.join(orders, executions.c.order_id == orders.c.id)
         if user_id is not None:
+            user_id_value = self._guid_storage_value(user_id, dialect_name=dialect_name)
             from_clause = from_clause.join(broker_accounts, broker_accounts.c.id == orders.c.broker_account_id)
         with self._session_factory() as session:
             total_query = select(func.count()).select_from(from_clause)
             if user_id is not None:
-                total_query = total_query.where(broker_accounts.c.user_id == user_id)
+                total_query = total_query.where(broker_accounts.c.user_id == user_id_value)
             total = session.scalar(total_query) or 0
             stmt = (
                 select(
@@ -69,7 +74,7 @@ class OrderRepository:
                 .offset(offset)
             )
             if user_id is not None:
-                stmt = stmt.where(broker_accounts.c.user_id == user_id)
+                stmt = stmt.where(broker_accounts.c.user_id == user_id_value)
             rows = session.execute(stmt).mappings().all()
         return [self._serialize_execution(row) for row in rows], int(total)
 
@@ -89,19 +94,29 @@ class OrderRepository:
         return self._serialize_order(row) if row else None
 
     def get_order_by_id(self, order_id: str) -> OrderItem | None:
+        dialect_name = self._dialect_name()
         with self._session_factory() as session:
-            row = session.execute(select(orders).where(orders.c.id == order_id)).mappings().one_or_none()
+            row = session.execute(select(orders).where(orders.c.id == self._guid_storage_value(order_id, dialect_name=dialect_name))).mappings().one_or_none()
         return self._serialize_order(row) if row else None
 
     def get_broker_account(self, broker_account_id: str) -> RowMapping | None:
+        dialect_name = self._dialect_name()
         with self._session_factory() as session:
-            return session.execute(select(broker_accounts).where(broker_accounts.c.id == broker_account_id)).mappings().one_or_none()
+            row = session.execute(
+                select(broker_accounts).where(broker_accounts.c.id == self._guid_storage_value(broker_account_id, dialect_name=dialect_name))
+            ).mappings().one_or_none()
+        if row is None:
+            return None
+        return self._normalize_guid_row(row)
 
     def create_order(self, values: Mapping[str, object]) -> OrderItem:
         payload = dict(values)
         client_order_id = str(payload["client_order_id"])
         idempotency_key = str(payload["idempotency_key"])
         with self._session_factory() as session:
+            dialect_name = session.bind.dialect.name if session.bind is not None else "sqlite"
+            payload["id"] = self._guid_storage_value(payload["id"], dialect_name=dialect_name)
+            payload["broker_account_id"] = self._guid_storage_value(payload["broker_account_id"], dialect_name=dialect_name)
             try:
                 with session.begin():
                     session.execute(insert(orders).values(payload))
@@ -137,6 +152,9 @@ class OrderRepository:
         payload = dict(values)
         broker_execution_id = str(payload["broker_execution_id"])
         with self._session_factory() as session:
+            dialect_name = session.bind.dialect.name if session.bind is not None else "sqlite"
+            payload["id"] = self._guid_storage_value(payload["id"], dialect_name=dialect_name)
+            payload["order_id"] = self._guid_storage_value(payload["order_id"], dialect_name=dialect_name)
             try:
                 with session.begin():
                     session.execute(insert(executions).values(payload))
@@ -171,9 +189,12 @@ class OrderRepository:
         return self._serialize_execution(row) if row else None
 
     def get_filled_quantity_total(self, order_id: str) -> Decimal:
+        dialect_name = self._dialect_name()
         with self._session_factory() as session:
             total = session.scalar(
-                select(func.coalesce(func.sum(executions.c.filled_quantity), 0)).where(executions.c.order_id == order_id)
+                select(func.coalesce(func.sum(executions.c.filled_quantity), 0)).where(
+                    executions.c.order_id == self._guid_storage_value(order_id, dialect_name=dialect_name)
+                )
             )
         return Decimal(str(total or 0))
 
@@ -187,13 +208,14 @@ class OrderRepository:
         before_state: dict[str, object] | None = None,
         after_state: dict[str, object] | None = None,
     ) -> None:
+        dialect_name = self._dialect_name()
         with self._session_factory() as session:
             with session.begin():
                 session.execute(
                     insert(audit_logs).values(
                         {
-                            "id": str(uuid4()),
-                            "user_id": user_id,
+                            "id": self._guid_storage_value(uuid4(), dialect_name=dialect_name),
+                            "user_id": self._guid_storage_value(user_id, dialect_name=dialect_name),
                             "resource_type": resource_type,
                             "resource_id": resource_id,
                             "action": action,
@@ -209,6 +231,7 @@ class OrderRepository:
         if row is None:
             return None
         payload = dict(row)
+        payload = OrderRepository._normalize_guid_row(payload)
         payload["status"] = normalize_order_status(str(payload["status"]))
         return OrderItem.model_validate(payload)
 
@@ -217,4 +240,26 @@ class OrderRepository:
         if row is None:
             return None
         payload = dict(row)
+        payload = OrderRepository._normalize_guid_row(payload)
         return ExecutionItem.model_validate(payload)
+
+    @staticmethod
+    def _normalize_guid_row(row: Mapping[str, object]) -> dict[str, object]:
+        payload = dict(row)
+        for key in ("id", "user_id", "broker_account_id", "order_id"):
+            value = payload.get(key)
+            if value is None:
+                continue
+            try:
+                payload[key] = uuid_str(value)
+            except Exception:
+                continue
+        return payload
+
+    def _guid_storage_value(self, value: object, *, dialect_name: str) -> str:
+        guid = coerce_uuid(value)
+        return sqlite_guid(guid) if dialect_name == "sqlite" else uuid_str(guid)
+
+    def _dialect_name(self) -> str:
+        with self._session_factory() as session:
+            return session.bind.dialect.name if session.bind is not None else "sqlite"

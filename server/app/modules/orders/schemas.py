@@ -6,6 +6,8 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
+from app.modules.risk.schemas import RiskCheckResult
+
 OrderStatus = Literal[
     "PENDING_SUBMIT",
     "SUBMITTED",
@@ -49,11 +51,6 @@ class PlaceOrderRequest(BaseModel):
         if self.order_type == "LIMIT" and self.limit_price is None:
             raise ValueError("limit_price is required for LIMIT orders.")
         return self
-
-
-class RiskCheckResult(BaseModel):
-    passed: bool = True
-    events: list[dict[str, Any]] = Field(default_factory=list)
 
 
 class OrderItem(BaseModel):

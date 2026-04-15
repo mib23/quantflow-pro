@@ -37,6 +37,7 @@ export function useTradingRealtime(symbol: string, brokerAccountId: string | nul
             channels: [
               `market.quote.${normalizedSymbol}`,
               ...(brokerAccountId ? [`orders.status.${brokerAccountId}`] : []),
+              ...(brokerAccountId ? [`risk.events.${brokerAccountId}`] : []),
             ],
           }),
         );
@@ -46,7 +47,7 @@ export function useTradingRealtime(symbol: string, brokerAccountId: string | nul
     });
 
     socket.addEventListener("message", (event) => {
-      applyTradingStreamMessage(queryClient, event.data);
+      applyTradingStreamMessage(queryClient, event.data, { accountId: brokerAccountId });
     });
 
     socket.addEventListener("error", () => {

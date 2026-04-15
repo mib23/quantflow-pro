@@ -3,10 +3,17 @@ from fastapi.responses import JSONResponse
 
 
 class ApiException(Exception):
-    def __init__(self, code: str, message: str, status_code: int = status.HTTP_400_BAD_REQUEST):
+    def __init__(
+        self,
+        code: str,
+        message: str,
+        status_code: int = status.HTTP_400_BAD_REQUEST,
+        details: dict[str, object] | None = None,
+    ):
         self.code = code
         self.message = message
         self.status_code = status_code
+        self.details = details
         super().__init__(message)
 
 
@@ -18,7 +25,11 @@ def register_exception_handlers(app: FastAPI) -> None:
             content={
                 "data": None,
                 "meta": {"request_id": getattr(request.state, "request_id", None)},
-                "error": {"code": exc.code, "message": exc.message},
+                "error": {
+                    "code": exc.code,
+                    "message": exc.message,
+                    **({"details": exc.details} if exc.details is not None else {}),
+                },
             },
         )
 

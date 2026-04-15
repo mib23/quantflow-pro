@@ -1,21 +1,21 @@
-from datetime import UTC, datetime
-
 from fastapi import APIRouter, Request
 
 from app.core.api import api_response
+from app.modules.market_data.service import get_latest_quote
 
 router = APIRouter()
 
 
 @router.get("/quote/{symbol}")
 def get_quote(symbol: str, request: Request) -> dict[str, object]:
+    quote = get_latest_quote(symbol)
     return api_response(
         {
-            "symbol": symbol.upper(),
-            "bid": 245.2,
-            "ask": 245.25,
-            "last": 245.23,
-            "timestamp": datetime.now(UTC).isoformat(),
+            "symbol": quote.symbol,
+            "bid": quote.bid,
+            "ask": quote.ask,
+            "last": quote.last,
+            "timestamp": quote.timestamp,
         },
         request,
     )

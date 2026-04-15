@@ -2,14 +2,19 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
 import {
   cancelTradingOrder,
+  checkTradingPreTradeRisk,
   getTradingAccountSnapshot,
   getTradingExecutions,
   getTradingOrders,
   getTradingQuote,
+  normalizeRiskEvent,
   placeTradingOrder,
+  TradingPreTradeRiskCheckInput,
+  TradingPreTradeRiskCheckResult,
   TradingExecution,
   TradingOrder,
   TradingQuote,
+  TradingRiskEvent,
 } from "@/features/trading/api/tradingApi";
 import { tradingQueryKeys } from "@/features/trading/hooks/tradingQueryKeys";
 
@@ -46,6 +51,37 @@ export function useTradingQuoteQuery(symbol: string) {
   });
 }
 
+export function useTradingPreTradeRiskCheckResultQuery() {
+  return useQuery({
+    queryKey: tradingQueryKeys.riskPreTradeLatest(),
+    queryFn: async () => null,
+    enabled: false,
+    initialData: null as TradingPreTradeRiskCheckResult | null,
+  });
+}
+
+export function useTradingRiskEventsQuery(accountId: string | null) {
+  const normalizedAccountId = accountId?.trim() ?? "";
+
+  return useQuery({
+    queryKey: tradingQueryKeys.riskEvents(normalizedAccountId || "__pending__"),
+    queryFn: async () => [] as TradingRiskEvent[],
+    enabled: false,
+    initialData: [] as TradingRiskEvent[],
+  });
+}
+
+export function useTradingPreTradeRiskCheckMutation() {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: (input: TradingPreTradeRiskCheckInput) => checkTradingPreTradeRisk(input),
+    onSuccess: (result) => {
+      queryClient.setQueryData(tradingQueryKeys.riskPreTradeLatest(), result);
+    },
+  });
+}
+
 export function usePlaceTradingOrderMutation() {
   const queryClient = useQueryClient();
 
@@ -70,6 +106,30 @@ export function usePlaceTradingOrderMutation() {
       queryClient.invalidateQueries({ queryKey: tradingQueryKeys.account() });
       queryClient.invalidateQueries({ queryKey: tradingQueryKeys.orders() });
       queryClient.invalidateQueries({ queryKey: tradingQueryKeys.executions() });
+    },
+    onError: (error, variables) => {
+      const riskError = asTradingApiError(error);
+
+      if (riskError?.code === "ORDER_RISK_REJECTED") {
+        queryClient.setQueryData<TradingPreTradeRiskCheckResult>(tradingQueryKeys.riskPreTradeLatest(), {
+          allowed: false,
+          decision: "REJECT",
+          reasonCode: riskError.code,
+          reason: null,
+          message: riskError.message || "订单被风控拒绝",
+          ruleId: readRecordString(riskError.details, ["rule_id", "ruleId"]),
+          eventId: readRecordString(riskError.details, ["event_id", "eventId"]),
+          severity: readRecordString(riskError.details, ["severity"]),
+          checkedAt: new Date().toISOString(),
+          symbol: variables.symbol.toUpperCase(),
+          side: variables.side,
+          orderType: variables.orderType,
+          quantity: variables.quantity,
+          limitPrice: variables.limitPrice != null ? variables.limitPrice : null,
+          accountId: variables.brokerAccountId,
+          raw: riskError.details ?? {},
+        });
+      }
     },
   });
 }
@@ -107,6 +167,10 @@ type TradingStreamMessage =
       payload?: unknown;
     }
   | Record<string, unknown>;
+
+type TradingStreamContext = {
+  accountId?: string | null;
+};
 
 function parseTradingStreamMessage(rawData: unknown): TradingStreamMessage | null {
   if (typeof rawData === "string") {
@@ -156,7 +220,48 @@ function asRecord(value: unknown): Record<string, unknown> | null {
   return typeof value === "object" && value !== null ? (value as Record<string, unknown>) : null;
 }
 
-export function applyTradingStreamMessage(queryClient: ReturnType<typeof useQueryClient>, rawMessage: unknown): void {
+function readRecordString(record: Record<string, unknown>, keys: string[]): string | null {
+  for (const key of keys) {
+    const value = record[key];
+
+    if (typeof value === "string" && value.trim().length > 0) {
+      return value;
+    }
+  }
+
+  return null;
+}
+
+function asTradingApiError(error: unknown): { code?: string | null; message: string; details?: Record<string, unknown> } | null {
+  if (typeof error !== "object" || error === null) {
+    return null;
+  }
+
+  const record = error as { code?: unknown; message?: unknown; details?: unknown };
+  const details = typeof record.details === "object" && record.details !== null ? (record.details as Record<string, unknown>) : {};
+
+  if (typeof record.message !== "string") {
+    return null;
+  }
+
+  return {
+    code: typeof record.code === "string" ? record.code : null,
+    message: record.message,
+    details,
+  };
+}
+
+function extractChannelAccountId(channel: string): string | null {
+  const match = /^risk\.events\.(.+)$/i.exec(channel.trim());
+
+  return match ? match[1].trim() : null;
+}
+
+export function applyTradingStreamMessage(
+  queryClient: ReturnType<typeof useQueryClient>,
+  rawMessage: unknown,
+  context: TradingStreamContext = {},
+): void {
   const message = parseTradingStreamMessage(rawMessage);
 
   if (!message) {
@@ -165,6 +270,7 @@ export function applyTradingStreamMessage(queryClient: ReturnType<typeof useQuer
 
   const record = asRecord(message.data) ?? asRecord(message.payload) ?? message;
   const messageType = String(message.type ?? message.kind ?? message.event ?? message.channel ?? "").toLowerCase();
+  const channel = String(message.channel ?? "").trim().toLowerCase();
 
   if (messageType.includes("quote") || ("bid" in record && "ask" in record)) {
     const symbol = String((record.symbol ?? message.symbol) || "").trim().toUpperCase();
@@ -182,6 +288,18 @@ export function applyTradingStreamMessage(queryClient: ReturnType<typeof useQuer
     }));
 
     return;
+  }
+
+  if (messageType.includes("risk") || channel.startsWith("risk.events.")) {
+    const accountId = readRecordString(record, ["account_id", "accountId"]) ?? extractChannelAccountId(String(message.channel ?? "")) ?? context.accountId ?? null;
+    const normalizedEvent = normalizeRiskEvent(record, accountId);
+
+    if (normalizedEvent) {
+      queryClient.setQueryData<TradingRiskEvent[]>(tradingQueryKeys.riskEvents(normalizedEvent.accountId), (current = []) => {
+        const filtered = current.filter((event) => event.id !== normalizedEvent.id);
+        return [normalizedEvent, ...filtered].slice(0, 20);
+      });
+    }
   }
 
   const clientOrderId = String(record.client_order_id ?? record.clientOrderId ?? record.order_id ?? record.orderId ?? "");

@@ -2,8 +2,14 @@ import { zodResolver } from "@hookform/resolvers/zod";
 import { useEffect } from "react";
 import { useForm } from "react-hook-form";
 import { z } from "zod";
+import { useQueryClient } from "@tanstack/react-query";
 
-import { usePlaceTradingOrderMutation } from "@/features/trading/hooks/useTradingQueries";
+import {
+  usePlaceTradingOrderMutation,
+  useTradingPreTradeRiskCheckMutation,
+  useTradingPreTradeRiskCheckResultQuery,
+} from "@/features/trading/hooks/useTradingQueries";
+import { tradingQueryKeys } from "@/features/trading/hooks/tradingQueryKeys";
 import { ORDER_SIDE_OPTIONS, ORDER_TYPE_OPTIONS } from "@/shared/lib/enums";
 import { formatCurrency } from "@/shared/lib/format";
 
@@ -59,7 +65,10 @@ export function OrderEntryForm({
   onSymbolChange,
 }: OrderEntryFormProps) {
   const schema = createOrderEntrySchema(buyingPower, referencePrice);
+  const queryClient = useQueryClient();
+  const preTradeRiskCheckMutation = useTradingPreTradeRiskCheckMutation();
   const placeOrderMutation = usePlaceTradingOrderMutation();
+  const preTradeRiskCheckQuery = useTradingPreTradeRiskCheckResultQuery();
 
   const {
     register,
@@ -91,7 +100,8 @@ export function OrderEntryForm({
 
   const estimatedPrice = orderType === "MARKET" ? referencePrice : limitPriceValue;
   const estimatedNotional = estimatedPrice ? estimatedPrice * quantityValue : null;
-  const isDisabled = disabled || !brokerAccountId || placeOrderMutation.isPending;
+  const latestRiskCheck = preTradeRiskCheckQuery.data;
+  const isDisabled = disabled || !brokerAccountId || placeOrderMutation.isPending || preTradeRiskCheckMutation.isPending;
 
   return (
     <form
@@ -101,7 +111,7 @@ export function OrderEntryForm({
           return;
         }
 
-        await placeOrderMutation.mutateAsync({
+        const orderDraft = {
           brokerAccountId,
           symbol: values.symbol.toUpperCase(),
           side: values.side,
@@ -110,7 +120,23 @@ export function OrderEntryForm({
           limitPrice: values.orderType === "LIMIT" ? values.limitPrice ?? null : null,
           timeInForce: "day",
           idempotencyKey: `ord-${Date.now()}-${values.symbol.toLowerCase()}`,
-        });
+        };
+
+        preTradeRiskCheckMutation.reset();
+        placeOrderMutation.reset();
+        queryClient.setQueryData(tradingQueryKeys.riskPreTradeLatest(), null);
+
+        try {
+          const preTradeRiskCheck = await preTradeRiskCheckMutation.mutateAsync(orderDraft);
+
+          if (!preTradeRiskCheck.allowed) {
+            return;
+          }
+
+          await placeOrderMutation.mutateAsync(orderDraft);
+        } catch {
+          return;
+        }
       })}
     >
       <div>
@@ -185,14 +211,30 @@ export function OrderEntryForm({
         disabled={isDisabled}
         className="w-full rounded-2xl bg-cyan-400 px-4 py-3 text-sm font-semibold text-slate-950 transition hover:bg-cyan-300 disabled:cursor-not-allowed disabled:opacity-60"
       >
-        {placeOrderMutation.isPending ? "提交中..." : `${side === "BUY" ? "买入" : "卖出"}订单`}
+        {placeOrderMutation.isPending || preTradeRiskCheckMutation.isPending ? "处理中..." : `${side === "BUY" ? "买入" : "卖出"}订单`}
       </button>
+
+      {latestRiskCheck ? (
+        <div
+          className={`rounded-2xl border px-4 py-3 text-sm ${
+            latestRiskCheck.allowed ? "border-emerald-900/40 bg-emerald-950/30 text-emerald-200" : "border-rose-900/40 bg-rose-950/30 text-rose-200"
+          }`}
+        >
+          <p className="text-xs uppercase tracking-[0.18em] text-slate-400">{latestRiskCheck.allowed ? "Pre-trade risk passed" : "Pre-trade risk rejected"}</p>
+          <p className="mt-2 font-medium">{latestRiskCheck.message}</p>
+          <p className="mt-2 text-xs text-slate-400">
+            {latestRiskCheck.ruleId ? `Rule ${latestRiskCheck.ruleId} · ` : ""}
+            {latestRiskCheck.reasonCode ? `Code ${latestRiskCheck.reasonCode}` : `Checked ${latestRiskCheck.checkedAt}`}
+          </p>
+        </div>
+      ) : null}
 
       {placeOrderMutation.isSuccess ? (
         <p className="text-xs text-emerald-400">
           订单 {placeOrderMutation.data.clientOrderId} 已进入 {placeOrderMutation.data.status} 阶段。
         </p>
       ) : null}
+      {preTradeRiskCheckMutation.error ? <p className="text-xs text-rose-400">{preTradeRiskCheckMutation.error.message}</p> : null}
       {placeOrderMutation.error ? <p className="text-xs text-rose-400">{placeOrderMutation.error.message}</p> : null}
       {!brokerAccountId ? <p className="text-xs text-amber-300">账户未加载完成，暂不能提交订单。</p> : null}
       {referencePrice ? (

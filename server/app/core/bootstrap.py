@@ -1,14 +1,20 @@
 from __future__ import annotations
 
 import uuid
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 
 from sqlalchemy.exc import SQLAlchemyError
 
 from app.core.database import get_engine, get_session_factory
-from app.core.models import AccountBalanceModel, BrokerAccountModel, PositionModel, UserModel
+from app.core.models import (
+    AccountBalanceModel,
+    BrokerAccountModel,
+    PositionModel,
+    UserModel,
+)
 from app.modules.auth.security import hash_password
+from app.modules.risk.seed import seed_default_risk_data
 
 
 def ensure_local_baseline() -> None:
@@ -66,17 +72,24 @@ def ensure_local_baseline() -> None:
                 .first()
             )
             if latest_balance is None:
-                session.add(
-                    AccountBalanceModel(
-                        id=uuid.uuid4(),
-                        broker_account_id=account.id,
-                        equity=Decimal("124592.40"),
-                        cash=Decimal("41240.00"),
-                        buying_power=Decimal("201840.00"),
-                        day_pnl=Decimal("1240.50"),
-                        snapshot_at=now,
+                baseline_points = [
+                    ("124010.00", "41850.00", "199640.00", "-210.00", now - timedelta(hours=4)),
+                    ("124220.00", "41680.00", "200120.00", "120.00", now - timedelta(hours=3)),
+                    ("124480.00", "41420.00", "201100.00", "480.00", now - timedelta(hours=2)),
+                    ("124592.40", "41240.00", "201840.00", "1240.50", now),
+                ]
+                for equity, cash, buying_power, day_pnl, snapshot_at in baseline_points:
+                    session.add(
+                        AccountBalanceModel(
+                            id=uuid.uuid4(),
+                            broker_account_id=account.id,
+                            equity=Decimal(equity),
+                            cash=Decimal(cash),
+                            buying_power=Decimal(buying_power),
+                            day_pnl=Decimal(day_pnl),
+                            snapshot_at=snapshot_at,
+                        )
                     )
-                )
 
             existing_symbols = {position.symbol for position in session.query(PositionModel).filter(PositionModel.broker_account_id == account.id)}
             if "TSLA" not in existing_symbols:
@@ -107,6 +120,8 @@ def ensure_local_baseline() -> None:
                         snapshot_at=now,
                     )
                 )
+
+            seed_default_risk_data(session, owner=existing_user, account=account, now=now)
 
             session.commit()
     except SQLAlchemyError:

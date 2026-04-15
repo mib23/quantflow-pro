@@ -25,6 +25,8 @@ from app.modules.orders.schemas import (
     RiskCheckResult,
 )
 from app.modules.orders.status import is_final_order_status, normalize_order_status
+from app.modules.risk.schemas import PreTradeCheckRequest
+from app.modules.risk.service import RiskService, get_risk_service
 
 
 @lru_cache
@@ -43,13 +45,19 @@ def get_broker_gateway() -> BrokerGateway:
 
 
 def get_order_service() -> "OrderService":
-    return OrderService(get_order_repository(), get_broker_gateway())
+    return OrderService(get_order_repository(), get_broker_gateway(), get_risk_service())
 
 
 class OrderService:
-    def __init__(self, repository: OrderRepository, broker_gateway: BrokerGateway | None = None):
+    def __init__(
+        self,
+        repository: OrderRepository,
+        broker_gateway: BrokerGateway | None = None,
+        risk_service: RiskService | None = None,
+    ):
         self._repository = repository
         self._broker_gateway = broker_gateway or NullBrokerGateway()
+        self._risk_service = risk_service
 
     def list_orders(self, page: int = 1, page_size: int = 20, user_id: str | None = None) -> OrderListData:
         items, total = self._repository.list_orders(page=page, page_size=page_size, user_id=user_id)
@@ -66,13 +74,23 @@ class OrderService:
         existing = self._repository.get_order_by_idempotency_key(payload.idempotency_key)
         if existing is not None:
             self._assert_idempotent_order(existing, payload)
-            return PlaceOrderResponse(**existing.model_dump(), risk_check=RiskCheckResult())
+            return PlaceOrderResponse(**existing.model_dump(), risk_check=RiskCheckResult(passed=True))
+
+        client_order_id = self._generate_client_order_id(payload.idempotency_key)
+        risk_check = self._run_pre_trade_check(
+            payload,
+            user_id=user_id,
+            broker_account=broker_account,
+            client_order_id=client_order_id,
+        )
+        if not risk_check.passed:
+            raise self._risk_service.build_rejection_exception(risk_check)
 
         created = self._repository.create_order(
             {
                 "id": str(uuid4()),
                 "broker_account_id": payload.broker_account_id,
-                "client_order_id": self._generate_client_order_id(payload.idempotency_key),
+                "client_order_id": client_order_id,
                 "broker_order_id": None,
                 "symbol": payload.symbol,
                 "side": payload.side,
@@ -95,7 +113,6 @@ class OrderService:
             after_state=created.model_dump(mode="json"),
         )
 
-        risk_check = RiskCheckResult()
         try:
             broker_update = self._broker_gateway.submit_order(created.model_dump(mode="json"))
         except Exception as exc:  # pragma: no cover - safety path
@@ -158,6 +175,33 @@ class OrderService:
         updated = self._sync_broker_update(requested.client_order_id, broker_update)
         self._publish_order_event(updated.broker_account_id, updated)
         return updated
+
+    def _run_pre_trade_check(
+        self,
+        payload: PlaceOrderRequest,
+        *,
+        user_id: str | None,
+        broker_account: dict[str, object],
+        client_order_id: str,
+    ) -> RiskCheckResult:
+        if self._risk_service is None:
+            return RiskCheckResult(passed=True)
+        return self._risk_service.check_pre_trade(
+            PreTradeCheckRequest(
+                broker_account_id=payload.broker_account_id,
+                symbol=payload.symbol,
+                side=payload.side,
+                order_type=payload.order_type,
+                quantity=payload.quantity,
+                limit_price=payload.limit_price,
+                time_in_force=payload.time_in_force,
+                idempotency_key=payload.idempotency_key,
+                client_order_id=client_order_id,
+            ),
+            user_id=user_id,
+            broker_account=broker_account,
+            persist=True,
+        )
 
     def sync_broker_order(
         self,
@@ -237,23 +281,39 @@ class OrderService:
     def _publish_order_event(self, broker_account_id: str, order: OrderItem, *, filled_quantity: float = 0.0) -> None:
         try:
             import asyncio
+            import inspect
 
             loop = asyncio.get_running_loop()
-            loop.create_task(
-                realtime_hub.publish(
-                    f"orders.status.{broker_account_id}",
-                    "order.status_changed",
-                    {
-                        "client_order_id": order.client_order_id,
-                        "status": order.status,
-                        "filled_quantity": filled_quantity,
-                        "remaining_quantity": max(float(order.quantity) - filled_quantity, 0),
-                        "updated_at": order.updated_at.isoformat(),
-                    },
-                )
+            publish_result = realtime_hub.publish(
+                f"orders.status.{broker_account_id}",
+                "order.status_changed",
+                {
+                    "client_order_id": order.client_order_id,
+                    "status": order.status,
+                    "filled_quantity": filled_quantity,
+                    "remaining_quantity": max(float(order.quantity) - filled_quantity, 0),
+                    "updated_at": order.updated_at.isoformat(),
+                },
             )
+            if inspect.isawaitable(publish_result):
+                loop.create_task(publish_result)
         except RuntimeError:
-            return
+            import asyncio
+            import inspect
+
+            publish_result = realtime_hub.publish(
+                f"orders.status.{broker_account_id}",
+                "order.status_changed",
+                {
+                    "client_order_id": order.client_order_id,
+                    "status": order.status,
+                    "filled_quantity": filled_quantity,
+                    "remaining_quantity": max(float(order.quantity) - filled_quantity, 0),
+                    "updated_at": order.updated_at.isoformat(),
+                },
+            )
+            if inspect.isawaitable(publish_result):
+                asyncio.run(publish_result)
 
     def _resolve_order(self, *, client_order_id: str | None, broker_order_id: str | None) -> OrderItem:
         order = None

@@ -3,16 +3,23 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from decimal import Decimal
 
+from fastapi import status
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine, insert
 from sqlalchemy.orm import sessionmaker
 
 from app.main import app
+from app.core.ids import sqlite_guid
+from app.core.exceptions import ApiException
 from app.modules.orders.broker import BrokerOrderUpdate
 from app.modules.orders.repository import OrderRepository
 from app.modules.orders.service import OrderService, get_order_service
 from app.modules.orders.status import normalize_order_status
 from app.modules.orders.tables import broker_accounts, metadata, users
+from app.modules.risk.schemas import RiskCheckResult
+
+USER_ID = "00000000-0000-0000-0000-000000000011"
+ACCOUNT_ID = "00000000-0000-0000-0000-000000000022"
 
 
 class RecordingBrokerGateway:
@@ -37,6 +44,28 @@ class RecordingBrokerGateway:
         return BrokerOrderUpdate(broker_order_id=broker_order_id, status="open")
 
 
+class RejectingRiskService:
+    def __init__(self) -> None:
+        self.calls = 0
+
+    def check_pre_trade(self, *args, **kwargs):
+        self.calls += 1
+        return RiskCheckResult(
+            passed=False,
+            reason="Order notional exceeds max_notional 1000.00.",
+            events=[],
+            rule_ids=["rule-max-notional"],
+        )
+
+    def build_rejection_exception(self, result: RiskCheckResult) -> ApiException:
+        return ApiException(
+            "ORDER_RISK_REJECTED",
+            result.reason or "Order rejected by risk rules.",
+            status.HTTP_422_UNPROCESSABLE_CONTENT,
+            details={"rule_ids": result.rule_ids},
+        )
+
+
 def _make_service(tmp_path):
     engine = create_engine(f"sqlite+pysqlite:///{tmp_path / 'orders.db'}", future=True)
     metadata.create_all(engine)
@@ -47,7 +76,7 @@ def _make_service(tmp_path):
             session.execute(
                 insert(users).values(
                     {
-                        "id": "usr_001",
+                        "id": sqlite_guid(USER_ID),
                         "email": "trader@example.com",
                         "full_name": "Trader One",
                         "password_hash": "hash",
@@ -61,8 +90,8 @@ def _make_service(tmp_path):
             session.execute(
                 insert(broker_accounts).values(
                     {
-                        "id": "acc_001",
-                        "user_id": "usr_001",
+                        "id": sqlite_guid(ACCOUNT_ID),
+                        "user_id": sqlite_guid(USER_ID),
                         "broker_name": "ALPACA",
                         "broker_account_no": "PA-001",
                         "external_account_id": "ext_001",
@@ -101,12 +130,12 @@ def test_orders_lifecycle_and_executions(tmp_path) -> None:
     try:
         client = TestClient(app)
 
-        response = client.get("/api/v1/orders", headers={"X-User-Id": "usr_001"})
+        response = client.get("/api/v1/orders", headers={"X-User-Id": USER_ID})
         assert response.status_code == 200
         assert response.json()["data"] == {"items": [], "page": 1, "page_size": 20, "total": 0}
 
         payload = {
-            "broker_account_id": "acc_001",
+            "broker_account_id": ACCOUNT_ID,
             "symbol": "amd",
             "side": "BUY",
             "order_type": "LIMIT",
@@ -115,7 +144,7 @@ def test_orders_lifecycle_and_executions(tmp_path) -> None:
             "time_in_force": "day",
             "idempotency_key": "idem-001",
         }
-        create_response = client.post("/api/v1/orders", json=payload, headers={"X-User-Id": "usr_001"})
+        create_response = client.post("/api/v1/orders", json=payload, headers={"X-User-Id": USER_ID})
         assert create_response.status_code == 200
         created = create_response.json()["data"]
         assert created["symbol"] == "AMD"
@@ -124,11 +153,11 @@ def test_orders_lifecycle_and_executions(tmp_path) -> None:
         assert created["client_order_id"].startswith("ord_")
         assert gateway.submissions and gateway.submissions[0]["client_order_id"] == created["client_order_id"]
 
-        duplicate_response = client.post("/api/v1/orders", json=payload, headers={"X-User-Id": "usr_001"})
+        duplicate_response = client.post("/api/v1/orders", json=payload, headers={"X-User-Id": USER_ID})
         assert duplicate_response.status_code == 200
         assert duplicate_response.json()["data"]["client_order_id"] == created["client_order_id"]
 
-        cancel_response = client.post(f"/api/v1/orders/{created['client_order_id']}/cancel", headers={"X-User-Id": "usr_001"})
+        cancel_response = client.post(f"/api/v1/orders/{created['client_order_id']}/cancel", headers={"X-User-Id": USER_ID})
         assert cancel_response.status_code == 200
         assert cancel_response.json()["data"]["status"] == "CANCELED"
         assert gateway.cancellations == ["brk_0001"]
@@ -141,14 +170,14 @@ def test_orders_lifecycle_and_executions(tmp_path) -> None:
             fee_amount=Decimal("0.50"),
         )
 
-        executions_response = client.get("/api/v1/orders/executions", headers={"X-User-Id": "usr_001"})
+        executions_response = client.get("/api/v1/orders/executions", headers={"X-User-Id": USER_ID})
         assert executions_response.status_code == 200
         executions_payload = executions_response.json()["data"]
         assert executions_payload["total"] == 1
         assert executions_payload["items"][0]["broker_execution_id"] == "exe_001"
         assert executions_payload["items"][0]["client_order_id"] == created["client_order_id"]
 
-        orders_response = client.get("/api/v1/orders", headers={"X-User-Id": "usr_001"})
+        orders_response = client.get("/api/v1/orders", headers={"X-User-Id": USER_ID})
         assert orders_response.status_code == 200
         orders_payload = orders_response.json()["data"]
         assert orders_payload["total"] == 1
@@ -164,7 +193,7 @@ def test_idempotency_conflict_rejects_different_payload(tmp_path) -> None:
     try:
         client = TestClient(app)
         payload = {
-            "broker_account_id": "acc_001",
+            "broker_account_id": ACCOUNT_ID,
             "symbol": "TSLA",
             "side": "SELL",
             "order_type": "MARKET",
@@ -172,13 +201,78 @@ def test_idempotency_conflict_rejects_different_payload(tmp_path) -> None:
             "time_in_force": "day",
             "idempotency_key": "idem-dup",
         }
-        first = client.post("/api/v1/orders", json=payload, headers={"X-User-Id": "usr_001"})
+        first = client.post("/api/v1/orders", json=payload, headers={"X-User-Id": USER_ID})
         assert first.status_code == 200
 
         changed_payload = dict(payload)
         changed_payload["quantity"] = 6
-        second = client.post("/api/v1/orders", json=changed_payload, headers={"X-User-Id": "usr_001"})
+        second = client.post("/api/v1/orders", json=changed_payload, headers={"X-User-Id": USER_ID})
         assert second.status_code == 409
         assert second.json()["error"]["code"] == "ORDER_IDEMPOTENCY_CONFLICT"
+    finally:
+        _clear_overrides()
+
+
+def test_place_order_rejects_when_risk_service_blocks(tmp_path) -> None:
+    engine = create_engine(f"sqlite+pysqlite:///{tmp_path / 'orders-risk.db'}", future=True)
+    metadata.create_all(engine)
+    session_factory = sessionmaker(bind=engine, autoflush=False, expire_on_commit=False, future=True)
+
+    with session_factory() as session:
+        with session.begin():
+            session.execute(
+                insert(users).values(
+                    {
+                        "id": sqlite_guid(USER_ID),
+                        "email": "trader@example.com",
+                        "full_name": "Trader One",
+                        "password_hash": "hash",
+                        "role": "TRADER",
+                        "status": "ACTIVE",
+                        "created_at": datetime.now(timezone.utc),
+                        "updated_at": datetime.now(timezone.utc),
+                    }
+                )
+            )
+            session.execute(
+                insert(broker_accounts).values(
+                    {
+                        "id": sqlite_guid(ACCOUNT_ID),
+                        "user_id": sqlite_guid(USER_ID),
+                        "broker_name": "ALPACA",
+                        "broker_account_no": "PA-001",
+                        "external_account_id": "ext_001",
+                        "environment": "paper",
+                        "status": "ACTIVE",
+                        "created_at": datetime.now(timezone.utc),
+                        "updated_at": datetime.now(timezone.utc),
+                    }
+                )
+            )
+
+    gateway = RecordingBrokerGateway()
+    risk_service = RejectingRiskService()
+    service = OrderService(OrderRepository(session_factory), gateway, risk_service)
+    _override_service(service)
+
+    try:
+        client = TestClient(app)
+        payload = {
+            "broker_account_id": ACCOUNT_ID,
+            "symbol": "TSLA",
+            "side": "BUY",
+            "order_type": "LIMIT",
+            "quantity": 10,
+            "limit_price": 150,
+            "time_in_force": "day",
+            "idempotency_key": "idem-risk-001",
+        }
+
+        response = client.post("/api/v1/orders", json=payload, headers={"X-User-Id": USER_ID})
+
+        assert response.status_code == 422
+        assert response.json()["error"]["code"] == "ORDER_RISK_REJECTED"
+        assert gateway.submissions == []
+        assert risk_service.calls == 1
     finally:
         _clear_overrides()
