@@ -1,18 +1,21 @@
-from fastapi import APIRouter
+from datetime import UTC, datetime
+
+from fastapi import APIRouter, Request
+
+from app.core.api import api_response
 
 router = APIRouter()
 
 
 @router.get("/quote/{symbol}")
-def get_quote(symbol: str) -> dict[str, object]:
-    return {
-        "data": {
+def get_quote(symbol: str, request: Request) -> dict[str, object]:
+    return api_response(
+        {
             "symbol": symbol.upper(),
             "bid": 245.2,
             "ask": 245.25,
             "last": 245.23,
-            "timestamp": "2026-04-14T07:32:00Z",
+            "timestamp": datetime.now(UTC).isoformat(),
         },
-        "meta": {"request_id": None},
-        "error": None,
-    }
+        request,
+    )

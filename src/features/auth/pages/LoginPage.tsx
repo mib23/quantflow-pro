@@ -5,7 +5,6 @@ import { useForm } from "react-hook-form";
 import { useNavigate } from "react-router-dom";
 import { z } from "zod";
 
-import { useSessionStore } from "@/entities/user/store";
 import { login } from "@/features/auth/api/login";
 
 const loginSchema = z.object({
@@ -17,7 +16,6 @@ type LoginValues = z.infer<typeof loginSchema>;
 
 export function LoginPage() {
   const navigate = useNavigate();
-  const setSession = useSessionStore((state) => state.setSession);
   const {
     register,
     handleSubmit,
@@ -32,15 +30,7 @@ export function LoginPage() {
 
   const mutation = useMutation({
     mutationFn: login,
-    onSuccess: (session) => {
-      if (!session.user || !session.accessToken || !session.refreshToken) {
-        return;
-      }
-      setSession({
-        accessToken: session.accessToken,
-        refreshToken: session.refreshToken,
-        user: session.user,
-      });
+    onSuccess: () => {
       navigate("/dashboard");
     },
   });

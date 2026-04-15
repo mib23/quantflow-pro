@@ -14,6 +14,13 @@ class Settings(BaseSettings):
         alias="QF_DATABASE_URL",
     )
     redis_url: str = Field(default="redis://localhost:6379/0", alias="QF_REDIS_URL")
+    jwt_secret: str = Field(default="quantflow-local-secret", alias="QF_JWT_SECRET")
+    access_token_ttl_minutes: int = Field(default=15, alias="QF_ACCESS_TOKEN_TTL_MINUTES")
+    refresh_token_ttl_days: int = Field(default=7, alias="QF_REFRESH_TOKEN_TTL_DAYS")
+    alpaca_api_key: str = Field(default="", alias="QF_ALPACA_API_KEY")
+    alpaca_secret_key: str = Field(default="", alias="QF_ALPACA_SECRET_KEY")
+    alpaca_base_url: str = Field(default="https://paper-api.alpaca.markets", alias="QF_ALPACA_BASE_URL")
+    alpaca_data_url: str = Field(default="https://data.alpaca.markets", alias="QF_ALPACA_DATA_URL")
     allowed_origins_raw: str = Field(
         default="http://localhost:5173,http://127.0.0.1:5173",
         alias="QF_ALLOWED_ORIGINS",

@@ -37,7 +37,8 @@ src/
 2. 创建虚拟环境：`python -m venv .venv`
 3. 激活并安装：`.venv\\Scripts\\activate && pip install -e .`
 4. 复制环境变量：`Copy-Item .env.example .env`
-5. 启动：`uvicorn app.main:app --reload`
+5. 迁移数据库：`alembic upgrade head`
+6. 启动：`uvicorn app.main:app --reload`
 
 ### 基础设施
 
@@ -46,6 +47,13 @@ src/
 ```powershell
 docker compose up --build
 ```
+
+默认联调账号：
+
+- `alex@quantflow.local / quantflow-demo`
+- `trader@quantflow.local / quantflow-demo`
+
+本地 `local/test` 环境启动时会自动补最小 seed 数据；如已配置 `QF_ALPACA_*`，接口会优先尝试对接 Alpaca paper，否则回退到标准化模拟响应。
 
 ## 验证
 

@@ -3,11 +3,14 @@ export type OrderSide = "BUY" | "SELL";
 export type OrderType = "MARKET" | "LIMIT" | "STOP";
 export type OrderStatus =
   | "PENDING_SUBMIT"
+  | "SUBMITTED"
   | "OPEN"
   | "PARTIALLY_FILLED"
   | "FILLED"
   | "CANCEL_REQUESTED"
-  | "CANCELLED";
+  | "CANCELED"
+  | "REJECTED"
+  | "FAILED";
 
 export interface SessionUser {
   id: string;
@@ -33,28 +36,62 @@ export interface AccountOverview {
   dayPnlPercent: number;
 }
 
+export interface BrokerAccount extends AccountOverview {
+  brokerAccountNo?: string;
+  externalAccountId?: string;
+  status?: string;
+}
+
 export interface Position {
+  brokerAccountId?: string;
   symbol: string;
   quantity: number;
   avgPrice: number;
   marketPrice: number;
+  marketValue?: number;
   unrealizedPnl: number;
 }
 
 export interface Order {
   clientOrderId: string;
+  brokerOrderId?: string | null;
   symbol: string;
   side: OrderSide;
+  orderType?: OrderType;
   quantity: number;
   limitPrice: number | null;
   status: OrderStatus;
+  timeInForce?: string;
+  idempotencyKey?: string;
   submittedAt: string;
+  updatedAt?: string;
+}
+
+export interface Execution {
+  id: string;
+  orderId: string;
+  clientOrderId: string;
+  brokerExecutionId: string;
+  symbol: string;
+  side: OrderSide;
+  filledQuantity: number;
+  filledPrice: number;
+  feeAmount: number;
+  executedAt: string;
 }
 
 export interface OrderBookLevel {
   price: number;
   size: number;
   total: number;
+}
+
+export interface BrokerQuote {
+  symbol: string;
+  bid: number | null;
+  ask: number | null;
+  last: number | null;
+  timestamp: string;
 }
 
 export interface StrategySummary {

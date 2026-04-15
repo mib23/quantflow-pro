@@ -12,23 +12,23 @@ class ApiException(Exception):
 
 def register_exception_handlers(app: FastAPI) -> None:
     @app.exception_handler(ApiException)
-    async def api_exception_handler(_: Request, exc: ApiException) -> JSONResponse:
+    async def api_exception_handler(request: Request, exc: ApiException) -> JSONResponse:
         return JSONResponse(
             status_code=exc.status_code,
             content={
                 "data": None,
-                "meta": {"request_id": None},
+                "meta": {"request_id": getattr(request.state, "request_id", None)},
                 "error": {"code": exc.code, "message": exc.message},
             },
         )
 
     @app.exception_handler(Exception)
-    async def unexpected_exception_handler(_: Request, exc: Exception) -> JSONResponse:
+    async def unexpected_exception_handler(request: Request, exc: Exception) -> JSONResponse:
         return JSONResponse(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             content={
                 "data": None,
-                "meta": {"request_id": None},
+                "meta": {"request_id": getattr(request.state, "request_id", None)},
                 "error": {
                     "code": "INTERNAL_UNEXPECTED_ERROR",
                     "message": str(exc),

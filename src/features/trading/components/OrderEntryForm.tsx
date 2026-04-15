@@ -1,51 +1,73 @@
 import { zodResolver } from "@hookform/resolvers/zod";
-import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { useEffect } from "react";
 import { useForm } from "react-hook-form";
 import { z } from "zod";
 
-import { submitOrder } from "@/features/trading/api/getTradingWorkspace";
+import { usePlaceTradingOrderMutation } from "@/features/trading/hooks/useTradingQueries";
 import { ORDER_SIDE_OPTIONS, ORDER_TYPE_OPTIONS } from "@/shared/lib/enums";
 import { formatCurrency } from "@/shared/lib/format";
 
-const orderEntrySchema = z
-  .object({
-    symbol: z.string().min(1, "请输入交易标的").max(8, "标的代码过长"),
-    side: z.enum(["BUY", "SELL"]),
-    orderType: z.enum(["MARKET", "LIMIT", "STOP"]),
-    quantity: z.coerce.number().int().min(1, "数量必须大于 0"),
-    limitPrice: z.preprocess(
-      (value) => (value === "" || value === null || value === undefined ? undefined : Number(value)),
-      z.number().positive("价格必须大于 0").optional(),
-    ),
-  })
-  .superRefine((value, context) => {
-    if (value.orderType === "LIMIT" && !value.limitPrice) {
-      context.addIssue({
-        code: z.ZodIssueCode.custom,
-        message: "限价单必须填写价格",
-        path: ["limitPrice"],
-      });
-    }
-  });
+function createOrderEntrySchema(buyingPower: number, referencePrice: number | null) {
+  return z
+    .object({
+      symbol: z.string().trim().min(1, "请输入交易标的").max(8, "标的代码过长"),
+      side: z.enum(["BUY", "SELL"]),
+      orderType: z.enum(["MARKET", "LIMIT", "STOP"]),
+      quantity: z.coerce.number().int().min(1, "数量必须大于 0"),
+      limitPrice: z.preprocess(
+        (value) => (value === "" || value === null || value === undefined ? undefined : Number(value)),
+        z.number().positive("价格必须大于 0").optional(),
+      ),
+    })
+    .superRefine((value, context) => {
+      const estimatedPrice = value.orderType === "MARKET" ? referencePrice : value.limitPrice ?? null;
 
-type OrderEntryValues = z.infer<typeof orderEntrySchema>;
-type OrderEntryFormInput = z.input<typeof orderEntrySchema>;
+      if (value.orderType === "LIMIT" && !value.limitPrice) {
+        context.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: "限价单必须填写价格",
+          path: ["limitPrice"],
+        });
+      }
+
+      if (estimatedPrice && estimatedPrice * value.quantity > buyingPower) {
+        context.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: "订单名义价值超过可用购买力",
+          path: ["quantity"],
+        });
+      }
+    });
+}
+
+type OrderEntryValues = z.infer<ReturnType<typeof createOrderEntrySchema>>;
+type OrderEntryFormInput = z.input<ReturnType<typeof createOrderEntrySchema>>;
 
 type OrderEntryFormProps = {
-  brokerAccountId: string;
+  brokerAccountId: string | null;
   buyingPower: number;
+  referencePrice: number | null;
+  disabled?: boolean;
+  onSymbolChange?: (symbol: string) => void;
 };
 
-export function OrderEntryForm({ brokerAccountId, buyingPower }: OrderEntryFormProps) {
-  const queryClient = useQueryClient();
+export function OrderEntryForm({
+  brokerAccountId,
+  buyingPower,
+  referencePrice,
+  disabled = false,
+  onSymbolChange,
+}: OrderEntryFormProps) {
+  const schema = createOrderEntrySchema(buyingPower, referencePrice);
+  const placeOrderMutation = usePlaceTradingOrderMutation();
+
   const {
     register,
     handleSubmit,
     watch,
     formState: { errors },
-    reset,
   } = useForm<OrderEntryFormInput, unknown, OrderEntryValues>({
-    resolver: zodResolver(orderEntrySchema),
+    resolver: zodResolver(schema),
     defaultValues: {
       symbol: "TSLA",
       side: "BUY",
@@ -55,34 +77,42 @@ export function OrderEntryForm({ brokerAccountId, buyingPower }: OrderEntryFormP
     },
   });
 
+  const symbol = watch("symbol");
   const side = watch("side");
+  const orderType = watch("orderType");
+  const quantity = watch("quantity");
+  const limitPrice = watch("limitPrice");
+  const quantityValue = toNumber(quantity);
+  const limitPriceValue = toNumber(limitPrice);
 
-  const mutation = useMutation({
-    mutationFn: async (values: OrderEntryValues) =>
-      submitOrder({
-        brokerAccountId,
-        symbol: values.symbol.toUpperCase(),
-        side: values.side,
-        orderType: values.orderType,
-        quantity: values.quantity,
-        limitPrice: values.orderType === "LIMIT" ? values.limitPrice ?? null : null,
-        timeInForce: "day",
-        idempotencyKey: `ord-${Date.now()}`,
-      }),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["trading-workspace"] });
-      reset({
-        symbol: "TSLA",
-        side,
-        orderType: "LIMIT",
-        quantity: 100,
-        limitPrice: 245.5,
-      });
-    },
-  });
+  useEffect(() => {
+    onSymbolChange?.((symbol || "TSLA").toString().trim().toUpperCase());
+  }, [onSymbolChange, symbol]);
+
+  const estimatedPrice = orderType === "MARKET" ? referencePrice : limitPriceValue;
+  const estimatedNotional = estimatedPrice ? estimatedPrice * quantityValue : null;
+  const isDisabled = disabled || !brokerAccountId || placeOrderMutation.isPending;
 
   return (
-    <form className="space-y-5" onSubmit={handleSubmit((values) => mutation.mutate(values))}>
+    <form
+      className="space-y-5"
+      onSubmit={handleSubmit(async (values) => {
+        if (!brokerAccountId) {
+          return;
+        }
+
+        await placeOrderMutation.mutateAsync({
+          brokerAccountId,
+          symbol: values.symbol.toUpperCase(),
+          side: values.side,
+          orderType: values.orderType,
+          quantity: values.quantity,
+          limitPrice: values.orderType === "LIMIT" ? values.limitPrice ?? null : null,
+          timeInForce: "day",
+          idempotencyKey: `ord-${Date.now()}-${values.symbol.toLowerCase()}`,
+        });
+      })}
+    >
       <div>
         <label className="mb-1 block text-xs font-medium uppercase tracking-[0.18em] text-slate-500">Symbol</label>
         <input
@@ -139,22 +169,50 @@ export function OrderEntryForm({ brokerAccountId, buyingPower }: OrderEntryFormP
         </div>
       </div>
 
-      <div className="rounded-2xl border border-slate-800 bg-ink-950 px-4 py-3 text-sm text-slate-400">
-        Buying Power <span className="ml-2 font-mono text-white">{formatCurrency(buyingPower)}</span>
+      <div className="grid grid-cols-2 gap-3 rounded-2xl border border-slate-800 bg-ink-950 px-4 py-3 text-sm text-slate-400">
+        <div>
+          <p className="text-xs uppercase tracking-[0.18em] text-slate-500">Buying Power</p>
+          <p className="mt-1 font-mono text-white">{formatCurrency(buyingPower)}</p>
+        </div>
+        <div className="text-right">
+          <p className="text-xs uppercase tracking-[0.18em] text-slate-500">Est. Notional</p>
+          <p className="mt-1 font-mono text-white">{estimatedNotional ? formatCurrency(estimatedNotional) : "N/A"}</p>
+        </div>
       </div>
 
       <button
         type="submit"
-        disabled={mutation.isPending}
+        disabled={isDisabled}
         className="w-full rounded-2xl bg-cyan-400 px-4 py-3 text-sm font-semibold text-slate-950 transition hover:bg-cyan-300 disabled:cursor-not-allowed disabled:opacity-60"
       >
-        {mutation.isPending ? "提交中..." : `${side === "BUY" ? "买入" : "卖出"}订单`}
+        {placeOrderMutation.isPending ? "提交中..." : `${side === "BUY" ? "买入" : "卖出"}订单`}
       </button>
 
-      {mutation.isSuccess ? (
-        <p className="text-xs text-emerald-400">订单已进入 {mutation.data.status} 阶段，等待 Broker 确认。</p>
+      {placeOrderMutation.isSuccess ? (
+        <p className="text-xs text-emerald-400">
+          订单 {placeOrderMutation.data.clientOrderId} 已进入 {placeOrderMutation.data.status} 阶段。
+        </p>
       ) : null}
-      {mutation.error ? <p className="text-xs text-rose-400">{mutation.error.message}</p> : null}
+      {placeOrderMutation.error ? <p className="text-xs text-rose-400">{placeOrderMutation.error.message}</p> : null}
+      {!brokerAccountId ? <p className="text-xs text-amber-300">账户未加载完成，暂不能提交订单。</p> : null}
+      {referencePrice ? (
+        <p className="text-xs text-slate-500">
+          参考价 {formatCurrency(referencePrice)} · {symbol ? symbol.toUpperCase() : "N/A"}
+        </p>
+      ) : null}
     </form>
   );
+}
+
+function toNumber(value: unknown) {
+  if (typeof value === "number") {
+    return Number.isFinite(value) ? value : 0;
+  }
+
+  if (typeof value === "string" && value.trim().length > 0) {
+    const parsed = Number(value);
+    return Number.isFinite(parsed) ? parsed : 0;
+  }
+
+  return 0;
 }

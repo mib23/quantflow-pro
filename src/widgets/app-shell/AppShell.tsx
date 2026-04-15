@@ -1,10 +1,12 @@
+import { useMutation, useQuery } from "@tanstack/react-query";
 import { Activity, Bell, CandlestickChart, FlaskConical, LayoutDashboard, LogOut, ShieldAlert } from "lucide-react";
-import { NavLink, Outlet } from "react-router-dom";
+import { NavLink, Outlet, useNavigate } from "react-router-dom";
 
+import { logout } from "@/shared/api/auth";
 import { useSessionStore } from "@/entities/user/store";
+import { getDashboardOverview } from "@/features/dashboard/api/getDashboardOverview";
 import { ROLE_LABELS } from "@/shared/lib/enums";
 import { formatCurrency, formatPercent } from "@/shared/lib/format";
-import { mockDashboardOverview } from "@/shared/mocks/data";
 
 const navItems = [
   { to: "/dashboard", label: "Dashboard", icon: LayoutDashboard },
@@ -14,9 +16,22 @@ const navItems = [
 ];
 
 export function AppShell() {
+  const navigate = useNavigate();
   const user = useSessionStore((state) => state.user);
-  const clearSession = useSessionStore((state) => state.clearSession);
-  const account = mockDashboardOverview.account;
+  const accountQuery = useQuery({
+    queryKey: ["shell-account-overview", user?.id ?? "anonymous"],
+    queryFn: getDashboardOverview,
+    enabled: Boolean(user),
+  });
+
+  const logoutMutation = useMutation({
+    mutationFn: logout,
+    onSettled: () => {
+      navigate("/login", { replace: true });
+    },
+  });
+
+  const account = accountQuery.data?.account;
 
   return (
     <div className="flex min-h-screen bg-transparent text-slate-200">
@@ -65,11 +80,12 @@ export function AppShell() {
           </div>
           <button
             type="button"
-            onClick={clearSession}
+            onClick={() => logoutMutation.mutate()}
+            disabled={logoutMutation.isPending}
             className="mt-4 inline-flex w-full items-center justify-center gap-2 rounded-2xl border border-slate-800 px-4 py-2.5 text-sm text-slate-300 transition hover:border-slate-700 hover:bg-slate-800/80 hover:text-white"
           >
             <LogOut className="h-4 w-4" />
-            <span>清空会话</span>
+            <span>{logoutMutation.isPending ? "退出中..." : "退出登录"}</span>
           </button>
         </div>
       </aside>
@@ -78,9 +94,17 @@ export function AppShell() {
         <header className="sticky top-0 z-20 border-b border-slate-900/70 bg-ink-950/85 px-6 py-4 backdrop-blur-xl lg:px-10">
           <div className="flex flex-col gap-4 xl:flex-row xl:items-center xl:justify-between">
             <div className="grid gap-3 sm:grid-cols-3">
-              <Metric label="Net Liquidity" value={formatCurrency(account.equity)} tone="text-emerald-400" />
-              <Metric label="Day P&L" value={`${formatCurrency(account.dayPnl)} (${formatPercent(account.dayPnlPercent)})`} tone="text-cyan-300" />
-              <Metric label="Broker" value={`${account.broker} · ${account.environment.toUpperCase()}`} tone="text-slate-200" />
+              <Metric label="Net Liquidity" value={account ? formatCurrency(account.equity) : "--"} tone="text-emerald-400" />
+              <Metric
+                label="Day P&L"
+                value={account ? `${formatCurrency(account.dayPnl)} (${formatPercent(account.dayPnlPercent)})` : "--"}
+                tone="text-cyan-300"
+              />
+              <Metric
+                label="Broker"
+                value={account ? `${account.broker} · ${account.environment.toUpperCase()}` : "--"}
+                tone="text-slate-200"
+              />
             </div>
 
             <div className="flex items-center gap-3">

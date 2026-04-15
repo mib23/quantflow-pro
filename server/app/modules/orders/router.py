@@ -1,76 +1,54 @@
-from typing import Literal
+from fastapi import APIRouter, Depends, Query, Request
 
-from fastapi import APIRouter
-from pydantic import BaseModel, Field
+from app.modules.orders.dependencies import resolve_current_user_id
+from app.modules.orders.schemas import PlaceOrderRequest
+from app.modules.orders.service import OrderService, get_order_service
 
 router = APIRouter()
 
 
-class PlaceOrderRequest(BaseModel):
-    broker_account_id: str
-    symbol: str
-    side: Literal["BUY", "SELL"]
-    order_type: Literal["MARKET", "LIMIT", "STOP"]
-    quantity: int = Field(gt=0)
-    limit_price: float | None = Field(default=None, gt=0)
-    time_in_force: str = "day"
-    idempotency_key: str
+def _envelope(data: object, request: Request | None = None) -> dict[str, object]:
+    request_id = getattr(getattr(request, "state", None), "request_id", None)
+    return {"data": data, "meta": {"request_id": request_id}, "error": None}
 
 
 @router.get("")
-def list_orders() -> dict[str, object]:
-    return {
-        "data": {
-            "items": [
-                {
-                    "client_order_id": "ord_20260414_001",
-                    "symbol": "AMD",
-                    "side": "BUY",
-                    "quantity": 200,
-                    "limit_price": 98.5,
-                    "status": "OPEN",
-                    "submitted_at": "2026-04-14T07:30:01Z",
-                },
-                {
-                    "client_order_id": "ord_20260414_002",
-                    "symbol": "SPY",
-                    "side": "SELL",
-                    "quantity": 50,
-                    "limit_price": 401.0,
-                    "status": "OPEN",
-                    "submitted_at": "2026-04-14T07:31:15Z",
-                },
-            ],
-            "page": 1,
-            "page_size": 20,
-            "total": 2,
-        },
-        "meta": {"request_id": None},
-        "error": None,
-    }
+def list_orders(
+    request: Request,
+    page: int = Query(default=1, ge=1),
+    page_size: int = Query(default=20, ge=1, le=500),
+    user_id: str = Depends(resolve_current_user_id),
+    service: OrderService = Depends(get_order_service),
+) -> dict[str, object]:
+    return _envelope(service.list_orders(page=page, page_size=page_size, user_id=user_id).model_dump(mode="json"), request)
+
+
+@router.get("/executions")
+def list_executions(
+    request: Request,
+    page: int = Query(default=1, ge=1),
+    page_size: int = Query(default=20, ge=1, le=500),
+    user_id: str = Depends(resolve_current_user_id),
+    service: OrderService = Depends(get_order_service),
+) -> dict[str, object]:
+    return _envelope(service.list_executions(page=page, page_size=page_size, user_id=user_id).model_dump(mode="json"), request)
 
 
 @router.post("")
-def place_order(payload: PlaceOrderRequest) -> dict[str, object]:
-    return {
-        "data": {
-            "client_order_id": f"ord_{payload.symbol.lower()}_{payload.idempotency_key[-4:]}",
-            "broker_order_id": None,
-            "status": "PENDING_SUBMIT",
-            "risk_check": {"passed": True, "events": []},
-        },
-        "meta": {"request_id": None},
-        "error": None,
-    }
+def place_order(
+    request: Request,
+    payload: PlaceOrderRequest,
+    user_id: str = Depends(resolve_current_user_id),
+    service: OrderService = Depends(get_order_service),
+) -> dict[str, object]:
+    return _envelope(service.place_order(payload, user_id=user_id).model_dump(mode="json"), request)
 
 
 @router.post("/{client_order_id}/cancel")
-def cancel_order(client_order_id: str) -> dict[str, object]:
-    return {
-        "data": {
-            "client_order_id": client_order_id,
-            "status": "CANCEL_REQUESTED",
-        },
-        "meta": {"request_id": None},
-        "error": None,
-    }
+def cancel_order(
+    request: Request,
+    client_order_id: str,
+    user_id: str = Depends(resolve_current_user_id),
+    service: OrderService = Depends(get_order_service),
+) -> dict[str, object]:
+    return _envelope(service.cancel_order(client_order_id, user_id=user_id).model_dump(mode="json"), request)

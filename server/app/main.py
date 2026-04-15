@@ -2,6 +2,8 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.api.router import api_router
+from app.api.ws import ws_router
+from app.core.bootstrap import ensure_local_baseline
 from app.core.exceptions import register_exception_handlers
 from app.core.logging import configure_logging
 from app.core.middleware import RequestContextMiddleware
@@ -30,8 +32,14 @@ def create_app() -> FastAPI:
     )
     application.add_middleware(RequestContextMiddleware)
 
+    @application.on_event("startup")
+    def startup() -> None:
+        if settings.env in {"local", "test"}:
+            ensure_local_baseline()
+
     register_exception_handlers(application)
     application.include_router(api_router)
+    application.include_router(ws_router)
 
     return application
 
