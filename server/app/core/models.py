@@ -1,8 +1,8 @@
 import uuid
-from datetime import datetime
+from datetime import date, datetime
 from decimal import Decimal
 
-from sqlalchemy import Boolean, CHAR, DateTime, ForeignKey, Integer, JSON, Numeric, String, Text, text
+from sqlalchemy import Boolean, CHAR, Date, DateTime, ForeignKey, Integer, JSON, Numeric, String, Text, UniqueConstraint, text
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column
 from sqlalchemy.types import TypeDecorator
@@ -188,6 +188,97 @@ class AuditLogModel(Base):
     before_state: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     after_state: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     trace_id: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=datetime.utcnow, server_default=text("now()")
+    )
+
+
+class StrategyModel(Base):
+    __tablename__ = "strategies"
+
+    id: Mapped[str] = mapped_column(GUID(), primary_key=True, default=lambda: str(uuid.uuid4()))
+    owner_user_id: Mapped[str] = mapped_column(GUID(), ForeignKey("users.id"), nullable=False)
+    name: Mapped[str] = mapped_column(String(255), nullable=False)
+    description: Mapped[str | None] = mapped_column(Text, nullable=True)
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="ACTIVE", server_default="ACTIVE")
+    default_parameters: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict, server_default="{}")
+    latest_version_id: Mapped[str | None] = mapped_column(GUID(), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=datetime.utcnow, server_default=text("now()")
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow, server_default=text("now()")
+    )
+
+
+class StrategyVersionModel(Base):
+    __tablename__ = "strategy_versions"
+
+    id: Mapped[str] = mapped_column(GUID(), primary_key=True, default=lambda: str(uuid.uuid4()))
+    strategy_id: Mapped[str] = mapped_column(GUID(), ForeignKey("strategies.id"), nullable=False)
+    version_number: Mapped[int] = mapped_column(Integer, nullable=False)
+    code_snapshot: Mapped[str] = mapped_column(Text, nullable=False)
+    parameters_snapshot: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict, server_default="{}")
+    version_note: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_by: Mapped[str] = mapped_column(GUID(), ForeignKey("users.id"), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=datetime.utcnow, server_default=text("now()")
+    )
+
+
+class BacktestJobModel(Base):
+    __tablename__ = "backtest_jobs"
+
+    id: Mapped[str] = mapped_column(GUID(), primary_key=True, default=lambda: str(uuid.uuid4()))
+    strategy_id: Mapped[str] = mapped_column(GUID(), ForeignKey("strategies.id"), nullable=False)
+    strategy_version_id: Mapped[str] = mapped_column(GUID(), ForeignKey("strategy_versions.id"), nullable=False)
+    submitted_by: Mapped[str] = mapped_column(GUID(), ForeignKey("users.id"), nullable=False)
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="QUEUED", server_default="QUEUED")
+    queue_name: Mapped[str] = mapped_column(String(64), nullable=False, default="backtests", server_default="backtests")
+    queue_job_id: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    dataset_key: Mapped[str] = mapped_column(String(128), nullable=False, default="demo-momentum", server_default="demo-momentum")
+    symbols: Mapped[list[str]] = mapped_column(JSON, nullable=False, default=list, server_default="[]")
+    parameters_snapshot: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict, server_default="{}")
+    benchmark: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    time_range: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict, server_default="{}")
+    failure_code: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    failure_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    cancellation_requested: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default=text("false"))
+    retry_of_job_id: Mapped[str | None] = mapped_column(GUID(), nullable=True)
+    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=datetime.utcnow, server_default=text("now()")
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow, server_default=text("now()")
+    )
+
+
+class BacktestResultModel(Base):
+    __tablename__ = "backtest_results"
+
+    id: Mapped[str] = mapped_column(GUID(), primary_key=True, default=lambda: str(uuid.uuid4()))
+    job_id: Mapped[str] = mapped_column(GUID(), ForeignKey("backtest_jobs.id"), nullable=False, unique=True)
+    metrics_summary: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict, server_default="{}")
+    equity_curve: Mapped[list[dict]] = mapped_column(JSON, nullable=False, default=list, server_default="[]")
+    trades: Mapped[list[dict]] = mapped_column(JSON, nullable=False, default=list, server_default="[]")
+    report: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict, server_default="{}")
+    report_format: Mapped[str] = mapped_column(String(16), nullable=False, default="json", server_default="json")
+    generated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=datetime.utcnow, server_default=text("now()")
+    )
+
+
+class BacktestLogModel(Base):
+    __tablename__ = "backtest_logs"
+
+    id: Mapped[str] = mapped_column(GUID(), primary_key=True, default=lambda: str(uuid.uuid4()))
+    job_id: Mapped[str] = mapped_column(GUID(), ForeignKey("backtest_jobs.id"), nullable=False)
+    level: Mapped[str] = mapped_column(String(16), nullable=False, default="INFO", server_default="INFO")
+    code: Mapped[str] = mapped_column(String(64), nullable=False)
+    message: Mapped[str] = mapped_column(Text, nullable=False)
+    details: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict, server_default="{}")
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, default=datetime.utcnow, server_default=text("now()")
     )
