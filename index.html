@@ -1,54 +1,12 @@
-<!DOCTYPE html>
-<html lang="en">
+<!doctype html>
+<html lang="zh-CN">
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Letiao-Quant- Algo Trading System</title>
-    <script src="https://cdn.tailwindcss.com"></script>
-    <style>
-      /* Custom Scrollbar for a premium feel */
-      ::-webkit-scrollbar {
-        width: 8px;
-        height: 8px;
-      }
-      ::-webkit-scrollbar-track {
-        background: #0f172a; 
-      }
-      ::-webkit-scrollbar-thumb {
-        background: #334155; 
-        border-radius: 4px;
-      }
-      ::-webkit-scrollbar-thumb:hover {
-        background: #475569; 
-      }
-      
-      /* Animation for flash effect */
-      @keyframes flash-green {
-        0% { background-color: rgba(16, 185, 129, 0.2); }
-        100% { background-color: transparent; }
-      }
-      @keyframes flash-red {
-        0% { background-color: rgba(239, 68, 68, 0.2); }
-        100% { background-color: transparent; }
-      }
-      .flash-up { animation: flash-green 1s ease-out; }
-      .flash-down { animation: flash-red 1s ease-out; }
-    </style>
-  <script type="importmap">
-{
-  "imports": {
-    "react-dom/": "https://aistudiocdn.com/react-dom@^19.2.0/",
-    "lucide-react": "https://aistudiocdn.com/lucide-react@^0.555.0",
-    "react/": "https://aistudiocdn.com/react@^19.2.0/",
-    "react": "https://aistudiocdn.com/react@^19.2.0",
-    "recharts": "https://aistudiocdn.com/recharts@^3.5.1"
-  }
-}
-</script>
-<link rel="stylesheet" href="/index.css">
-</head>
-  <body class="bg-slate-950 text-slate-200 antialiased selection:bg-indigo-500 selection:text-white">
+    <title>QuantFlow Pro</title>
+  </head>
+  <body class="bg-ink-950 text-slate-100">
     <div id="root"></div>
-  <script type="module" src="/index.tsx"></script>
-</body>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
 </html>
