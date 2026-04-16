@@ -33,12 +33,19 @@ src/
 
 ### 后端
 
+要求：
+
+- 已安装 `Python 3.12+`
+- 本地已启动 PostgreSQL 和 Redis
+
 1. 进入目录：`cd server`
-2. 创建虚拟环境：`python -m venv .venv`
-3. 激活并安装：`.venv\\Scripts\\activate && pip install -e .`
-4. 复制环境变量：`Copy-Item .env.example .env`
-5. 迁移数据库：`alembic upgrade head`
-6. 启动：`uvicorn app.main:app --reload`
+2. 使用 Python 3.12 创建虚拟环境：`py -3.12 -m venv .venv`
+3. 激活虚拟环境：`.\.venv\Scripts\Activate.ps1`
+4. 升级打包工具：`python -m pip install --upgrade pip setuptools wheel`
+5. 安装依赖：`python -m pip install -e .`
+6. 复制环境变量：`Copy-Item .env.example .env`
+7. 迁移数据库：`alembic upgrade head`
+8. 启动服务：`uvicorn app.main:app --reload`
 
 ### 基础设施
 
@@ -59,7 +66,7 @@ docker compose up --build
 
 - 前端类型检查：`npm run check`
 - 前端构建：`npm run build`
-- 后端测试：`cd server && pytest`
+- 后端测试：`cd server; pytest`
 - 健康检查：[http://localhost:8000/health/liveness](http://localhost:8000/health/liveness)
 
 ## Phase 0 文档
