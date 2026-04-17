@@ -117,6 +117,8 @@ class OrderRepository:
             dialect_name = session.bind.dialect.name if session.bind is not None else "sqlite"
             payload["id"] = self._guid_storage_value(payload["id"], dialect_name=dialect_name)
             payload["broker_account_id"] = self._guid_storage_value(payload["broker_account_id"], dialect_name=dialect_name)
+            if payload.get("runtime_instance_id") is not None:
+                payload["runtime_instance_id"] = self._guid_storage_value(payload["runtime_instance_id"], dialect_name=dialect_name)
             try:
                 with session.begin():
                     session.execute(insert(orders).values(payload))
@@ -246,7 +248,7 @@ class OrderRepository:
     @staticmethod
     def _normalize_guid_row(row: Mapping[str, object]) -> dict[str, object]:
         payload = dict(row)
-        for key in ("id", "user_id", "broker_account_id", "order_id"):
+        for key in ("id", "user_id", "broker_account_id", "order_id", "runtime_instance_id"):
             value = payload.get(key)
             if value is None:
                 continue

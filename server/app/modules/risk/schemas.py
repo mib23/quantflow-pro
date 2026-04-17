@@ -147,6 +147,7 @@ class RiskEventItem(BaseModel):
     rule_name: str
     rule_type: RiskRuleType
     account_id: str
+    runtime_instance_id: str | None = None
     client_order_id: str | None = None
     order_id: str | None = None
     severity: Literal["LOW", "MEDIUM", "HIGH", "CRITICAL"]
@@ -191,6 +192,7 @@ class RiskSummaryResponse(BaseModel):
 
 class PreTradeCheckRequest(BaseModel):
     broker_account_id: str = Field(min_length=1)
+    runtime_instance_id: str | None = Field(default=None, min_length=1)
     symbol: str = Field(min_length=1)
     side: Literal["BUY", "SELL"]
     order_type: Literal["MARKET", "LIMIT", "STOP"]
@@ -212,7 +214,7 @@ class PreTradeCheckRequest(BaseModel):
     def normalize_time_in_force(cls, value: str) -> str:
         return value.strip().lower()
 
-    @field_validator("idempotency_key", "client_order_id")
+    @field_validator("runtime_instance_id", "idempotency_key", "client_order_id")
     @classmethod
     def normalize_optional_key(cls, value: str | None) -> str | None:
         if value is None:

@@ -7,6 +7,7 @@ from app.modules.dashboard.router import router as dashboard_router
 from app.modules.backtests.router import router as backtests_router
 from app.modules.market_data.router import router as market_data_router
 from app.modules.orders.router import router as orders_router
+from app.modules.runtime.router import router as runtime_router
 from app.modules.strategies.router import router as strategies_router
 from app.modules.risk.router import router as risk_router
 
@@ -20,3 +21,4 @@ api_router.include_router(backtests_router, prefix="/api/v1/backtests", tags=["b
 api_router.include_router(market_data_router, prefix="/api/v1/market-data", tags=["market-data"])
 api_router.include_router(orders_router, prefix="/api/v1/orders", tags=["orders"])
 api_router.include_router(risk_router, prefix="/api/v1/risk", tags=["risk"])
+api_router.include_router(runtime_router, prefix="/api/v1/runtime", tags=["runtime"])

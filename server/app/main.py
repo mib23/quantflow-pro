@@ -1,3 +1,7 @@
+import asyncio
+import contextlib
+import logging
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
@@ -8,6 +12,22 @@ from app.core.exceptions import register_exception_handlers
 from app.core.logging import configure_logging
 from app.core.middleware import RequestContextMiddleware
 from app.core.settings import get_settings
+from app.modules.runtime.service import get_runtime_service
+
+logger = logging.getLogger(__name__)
+RUNTIME_HEALTH_MONITOR_INTERVAL_SECONDS = 30
+
+
+async def _run_runtime_health_monitor(stop_event: asyncio.Event) -> None:
+    while not stop_event.is_set():
+        try:
+            await asyncio.wait_for(stop_event.wait(), timeout=RUNTIME_HEALTH_MONITOR_INTERVAL_SECONDS)
+            break
+        except asyncio.TimeoutError:
+            try:
+                get_runtime_service().sweep_stale_instances()
+            except Exception:
+                logger.exception("Runtime heartbeat sweep failed.")
 
 
 def create_app() -> FastAPI:
@@ -33,9 +53,23 @@ def create_app() -> FastAPI:
     application.add_middleware(RequestContextMiddleware)
 
     @application.on_event("startup")
-    def startup() -> None:
+    async def startup() -> None:
         if settings.env in {"local", "test"}:
             ensure_local_baseline()
+        if settings.env != "test":
+            stop_event = asyncio.Event()
+            application.state.runtime_health_monitor_stop_event = stop_event
+            application.state.runtime_health_monitor_task = asyncio.create_task(_run_runtime_health_monitor(stop_event))
+
+    @application.on_event("shutdown")
+    async def shutdown() -> None:
+        stop_event = getattr(application.state, "runtime_health_monitor_stop_event", None)
+        task = getattr(application.state, "runtime_health_monitor_task", None)
+        if stop_event is not None:
+            stop_event.set()
+        if task is not None:
+            with contextlib.suppress(asyncio.CancelledError):
+                await task
 
     register_exception_handlers(application)
     application.include_router(api_router)

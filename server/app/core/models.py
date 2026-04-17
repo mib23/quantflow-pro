@@ -98,6 +98,7 @@ class OrderModel(Base):
 
     id: Mapped[str] = mapped_column(GUID(), primary_key=True, default=lambda: str(uuid.uuid4()))
     broker_account_id: Mapped[str] = mapped_column(GUID(), ForeignKey("broker_accounts.id"), nullable=False)
+    runtime_instance_id: Mapped[str | None] = mapped_column(GUID(), ForeignKey("runtime_instances.id"), nullable=True)
     client_order_id: Mapped[str] = mapped_column(String(100), nullable=False, unique=True)
     broker_order_id: Mapped[str | None] = mapped_column(String(100), nullable=True, unique=True)
     symbol: Mapped[str] = mapped_column(String(32), nullable=False)
@@ -152,6 +153,7 @@ class RiskEventModel(Base):
     id: Mapped[str] = mapped_column(GUID(), primary_key=True, default=lambda: str(uuid.uuid4()))
     risk_rule_id: Mapped[str] = mapped_column(GUID(), ForeignKey("risk_rules.id"), nullable=False)
     broker_account_id: Mapped[str] = mapped_column(GUID(), ForeignKey("broker_accounts.id"), nullable=False)
+    runtime_instance_id: Mapped[str | None] = mapped_column(GUID(), ForeignKey("runtime_instances.id"), nullable=True)
     order_id: Mapped[str | None] = mapped_column(GUID(), ForeignKey("orders.id"), nullable=True)
     client_order_id: Mapped[str | None] = mapped_column(String(100), nullable=True)
     severity: Mapped[str] = mapped_column(String(20), nullable=False)
@@ -227,6 +229,90 @@ class StrategyVersionModel(Base):
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, default=datetime.utcnow, server_default=text("now()")
     )
+
+
+class RuntimeInstanceModel(Base):
+    __tablename__ = "runtime_instances"
+
+    id: Mapped[str] = mapped_column(GUID(), primary_key=True, default=lambda: str(uuid.uuid4()))
+    strategy_id: Mapped[str] = mapped_column(GUID(), ForeignKey("strategies.id"), nullable=False)
+    strategy_version_id: Mapped[str] = mapped_column(GUID(), ForeignKey("strategy_versions.id"), nullable=False)
+    broker_account_id: Mapped[str] = mapped_column(GUID(), ForeignKey("broker_accounts.id"), nullable=False)
+    submitted_by: Mapped[str] = mapped_column(GUID(), ForeignKey("users.id"), nullable=False)
+    environment: Mapped[str] = mapped_column(String(20), nullable=False)
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="CREATED", server_default="CREATED")
+    approval_status: Mapped[str] = mapped_column(String(32), nullable=False, default="NOT_REQUIRED", server_default="NOT_REQUIRED")
+    parameters_snapshot: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict, server_default="{}")
+    deployment_notes: Mapped[str | None] = mapped_column(Text, nullable=True)
+    submitted_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=datetime.utcnow, server_default=text("now()")
+    )
+    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    stopped_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    last_heartbeat_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    heartbeat_timeout_seconds: Mapped[int] = mapped_column(Integer, nullable=False, default=120, server_default="120")
+    restart_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
+    broker_failure_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
+    error_summary: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=datetime.utcnow, server_default=text("now()")
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow, server_default=text("now()")
+    )
+
+
+class DeploymentApprovalModel(Base):
+    __tablename__ = "deployment_approvals"
+
+    id: Mapped[str] = mapped_column(GUID(), primary_key=True, default=lambda: str(uuid.uuid4()))
+    runtime_instance_id: Mapped[str] = mapped_column(GUID(), ForeignKey("runtime_instances.id"), nullable=False, unique=True)
+    requested_by: Mapped[str] = mapped_column(GUID(), ForeignKey("users.id"), nullable=False)
+    reviewed_by: Mapped[str | None] = mapped_column(GUID(), ForeignKey("users.id"), nullable=True)
+    decision: Mapped[str] = mapped_column(String(32), nullable=False, default="PENDING", server_default="PENDING")
+    note: Mapped[str | None] = mapped_column(Text, nullable=True)
+    requested_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=datetime.utcnow, server_default=text("now()")
+    )
+    decided_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow, server_default=text("now()")
+    )
+
+
+class RuntimeLogEntryModel(Base):
+    __tablename__ = "runtime_logs"
+
+    id: Mapped[str] = mapped_column(GUID(), primary_key=True, default=lambda: str(uuid.uuid4()))
+    runtime_instance_id: Mapped[str] = mapped_column(GUID(), ForeignKey("runtime_instances.id"), nullable=False)
+    level: Mapped[str] = mapped_column(String(20), nullable=False)
+    source: Mapped[str] = mapped_column(String(50), nullable=False)
+    message: Mapped[str] = mapped_column(Text, nullable=False)
+    context: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict, server_default="{}")
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=datetime.utcnow, server_default=text("now()")
+    )
+
+
+class RuntimeAlertModel(Base):
+    __tablename__ = "runtime_alerts"
+
+    id: Mapped[str] = mapped_column(GUID(), primary_key=True, default=lambda: str(uuid.uuid4()))
+    runtime_instance_id: Mapped[str] = mapped_column(GUID(), ForeignKey("runtime_instances.id"), nullable=False)
+    severity: Mapped[str] = mapped_column(String(20), nullable=False)
+    alert_type: Mapped[str] = mapped_column(String(50), nullable=False)
+    status: Mapped[str] = mapped_column(String(20), nullable=False, default="OPEN", server_default="OPEN")
+    message: Mapped[str] = mapped_column(Text, nullable=False)
+    recommendation: Mapped[str | None] = mapped_column(Text, nullable=True)
+    payload: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict, server_default="{}")
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=datetime.utcnow, server_default=text("now()")
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow, server_default=text("now()")
+    )
+
+
 class BacktestJobModel(Base):
     __tablename__ = "backtest_jobs"
 

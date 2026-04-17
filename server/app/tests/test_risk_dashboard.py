@@ -44,7 +44,7 @@ def _seed_phase2_data(session_factory):
     account_id = UUID("00000000-0000-0000-0000-000000000022")
     rule_max_id = UUID("00000000-0000-0000-0000-000000000101")
     rule_restricted_id = UUID("00000000-0000-0000-0000-000000000102")
-    now = datetime(2026, 4, 15, 8, 30, tzinfo=UTC)
+    now = datetime.now(UTC).replace(second=0, microsecond=0)
 
     with session_factory() as session:
         with session.begin():
