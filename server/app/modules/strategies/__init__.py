@@ -1,2 +1,1 @@
-from app.modules.strategies.router import router
-
+"""Strategy management module."""

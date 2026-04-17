@@ -97,9 +97,83 @@ export interface BrokerQuote {
 export interface StrategySummary {
   id: string;
   name: string;
+  description: string | null;
+  status: "ACTIVE" | "ARCHIVED" | "DRAFT";
+  defaultParameters: Record<string, unknown>;
+  latestVersionId: string | null;
+  latestVersionTag: string | null;
+  updatedAt: string;
+}
+
+export interface StrategyVersion {
+  id: string;
+  strategyId: string;
+  versionNumber: number;
+  versionTag: string;
+  code: string;
+  parameters: Record<string, unknown>;
+  versionNote: string | null;
+  createdBy: string;
+  createdAt: string;
+}
+
+export interface StrategyDetail extends StrategySummary {
+  ownerUserId: string;
+  createdAt: string;
+  versions: StrategyVersion[];
+}
+
+export interface BacktestLog {
+  id: string;
+  level: string;
+  code: string;
+  message: string;
+  details: Record<string, unknown>;
+  createdAt: string;
+}
+
+export interface BacktestJob {
+  id: string;
+  strategyId: string;
+  strategyVersionId: string;
+  strategyName: string;
+  strategyVersionTag: string;
+  status: "QUEUED" | "RUNNING" | "SUCCEEDED" | "FAILED" | "CANCELED";
+  queueName: string;
+  queueJobId: string | null;
   symbols: string[];
-  status: "RUNNING" | "STOPPED" | "ERROR";
-  dailyPnl: number;
+  benchmark: string | null;
+  parameters: Record<string, unknown>;
+  timeRange: {
+    start: string;
+    end: string;
+  };
+  failureCode: string | null;
+  failureReason: string | null;
+  createdAt: string;
+  startedAt: string | null;
+  finishedAt: string | null;
+  resultAvailable: boolean;
+  logs: BacktestLog[];
+}
+
+export interface BacktestMetricMap {
+  totalReturn?: number;
+  sharpe?: number;
+  maxDrawdown?: number;
+  winRate?: number;
+  tradeCount?: number;
+  [key: string]: unknown;
+}
+
+export interface BacktestResult {
+  jobId: string;
+  metrics: BacktestMetricMap;
+  equityCurve: Array<{ time: string; equity: number }>;
+  trades: Array<Record<string, unknown>>;
+  report: Record<string, unknown>;
+  reportFormat: string;
+  generatedAt: string;
 }
 
 export interface LogEntry {

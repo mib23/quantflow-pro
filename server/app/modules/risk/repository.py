@@ -287,6 +287,7 @@ class RiskRepository:
         account = self._resolve_account(user_id=user_id, broker_account_id=broker_account_id)
         if account is None:
             raise ApiException("BROKER_ACCOUNT_NOT_FOUND", "Broker account not found.", status.HTTP_404_NOT_FOUND)
+        latest_balance = self.get_latest_balance(str(account["id"]))
 
         with self._session_factory() as session:
             rule_rows = session.execute(
@@ -296,7 +297,11 @@ class RiskRepository:
         active_rules = [row for row in rule_rows if bool(row.enabled) and self._rule_applies_to_account(row, str(account["id"]))]
         recent_events = self.list_recent_events(user_id=user_id, broker_account_id=str(account["id"]), limit=10)
         all_recent_events = self.list_events(user_id=user_id, broker_account_id=str(account["id"]), page=1, page_size=1000).items
-        window_start = datetime.now(UTC) - self._day_delta()
+        reference_candidates = [self._as_utc_datetime(event.occurred_at) for event in all_recent_events]
+        if latest_balance is not None and latest_balance.get("snapshot_at") is not None:
+            reference_candidates.append(self._as_utc_datetime(latest_balance["snapshot_at"]))
+        reference_time = max(reference_candidates, default=datetime.now(UTC))
+        window_start = reference_time - self._day_delta()
         total_events_24h = sum(1 for event in all_recent_events if self._as_utc_datetime(event.occurred_at) >= window_start)
         blocked_orders_today = sum(
             1
@@ -305,7 +310,7 @@ class RiskRepository:
             and any(token in event.status.upper() for token in ("BLOCK", "REJECT", "DENY"))
         )
         unresolved_events = sum(1 for event in all_recent_events if event.status.upper() not in {"RESOLVED", "CLOSED"})
-        equity = Decimal(str(account.get("equity") or 0))
+        equity = Decimal(str((latest_balance or {}).get("equity") or 0))
         max_single_order_value = self._extract_min_notional(active_rules)
         max_daily_loss = self._extract_min_daily_loss(active_rules)
         max_position_size_percent = float((Decimal(str(max_single_order_value)) / equity * Decimal("100")) if max_single_order_value and equity > 0 else 0)
@@ -327,7 +332,7 @@ class RiskRepository:
             triggered_today=total_events_24h,
             blocked_orders_today=blocked_orders_today,
             unresolved_events=unresolved_events,
-            updated_at=datetime.now(UTC),
+            updated_at=reference_time,
         )
 
     def evaluate_pre_trade(
