@@ -23,6 +23,7 @@ OrderStatus = Literal[
 
 class PlaceOrderRequest(BaseModel):
     broker_account_id: str = Field(min_length=1)
+    runtime_instance_id: str | None = None
     symbol: str = Field(min_length=1)
     side: Literal["BUY", "SELL"]
     order_type: Literal["MARKET", "LIMIT", "STOP"]
@@ -56,6 +57,7 @@ class PlaceOrderRequest(BaseModel):
 class OrderItem(BaseModel):
     id: str
     broker_account_id: str
+    runtime_instance_id: str | None = None
     client_order_id: str
     broker_order_id: str | None = None
     symbol: str

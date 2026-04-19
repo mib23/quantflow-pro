@@ -39,6 +39,7 @@ orders = Table(
     metadata,
     Column("id", guid_type, primary_key=True),
     Column("broker_account_id", guid_type, ForeignKey("broker_accounts.id"), nullable=False),
+    Column("runtime_instance_id", guid_type, nullable=True),
     Column("client_order_id", String(100), nullable=False, unique=True),
     Column("broker_order_id", String(100), nullable=True, unique=True),
     Column("symbol", String(32), nullable=False),

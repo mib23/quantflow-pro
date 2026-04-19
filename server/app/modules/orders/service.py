@@ -90,6 +90,7 @@ class OrderService:
             {
                 "id": str(uuid4()),
                 "broker_account_id": payload.broker_account_id,
+                "runtime_instance_id": payload.runtime_instance_id,
                 "client_order_id": client_order_id,
                 "broker_order_id": None,
                 "symbol": payload.symbol,
@@ -189,6 +190,7 @@ class OrderService:
         return self._risk_service.check_pre_trade(
             PreTradeCheckRequest(
                 broker_account_id=payload.broker_account_id,
+                runtime_instance_id=payload.runtime_instance_id,
                 symbol=payload.symbol,
                 side=payload.side,
                 order_type=payload.order_type,
@@ -343,6 +345,7 @@ class OrderService:
     def _assert_idempotent_order(order: OrderItem, payload: PlaceOrderRequest) -> None:
         if (
             order.broker_account_id != payload.broker_account_id
+            or order.runtime_instance_id != payload.runtime_instance_id
             or order.symbol != payload.symbol
             or order.side != payload.side
             or order.order_type != payload.order_type
