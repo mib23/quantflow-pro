@@ -1,11 +1,15 @@
 from __future__ import annotations
 
+from types import SimpleNamespace
+
 import pytest
 from fastapi.testclient import TestClient
+from redis.exceptions import ConnectionError as RedisConnectionError
 from sqlalchemy import create_engine, text
 from sqlalchemy.pool import StaticPool
 
 from app.main import app
+from app.modules.auth import dependencies as auth_dependencies
 from app.modules.auth.dependencies import get_auth_service
 from app.modules.auth.repository import StoredUser, UserRepository
 from app.modules.auth.security import hash_password
@@ -146,3 +150,26 @@ def test_user_repository_reads_from_sqlite() -> None:
     assert user is not None
     assert user.email == "test@example.com"
     assert user.role == "TRADER"
+
+
+def test_get_auth_session_store_falls_back_to_memory_when_local_redis_is_unavailable(monkeypatch: pytest.MonkeyPatch) -> None:
+    class UnavailableRedisSessionStore:
+        def __init__(self, *_args, **_kwargs) -> None:
+            pass
+
+        def ping(self) -> bool:
+            raise RedisConnectionError("redis unavailable")
+
+    auth_dependencies.get_auth_session_store.cache_clear()
+    monkeypatch.setattr(
+        auth_dependencies,
+        "get_settings",
+        lambda: SimpleNamespace(env="local", redis_url="redis://localhost:6379/0"),
+    )
+    monkeypatch.setattr(auth_dependencies, "RedisSessionStore", UnavailableRedisSessionStore)
+
+    try:
+        store = auth_dependencies.get_auth_session_store()
+        assert isinstance(store, InMemorySessionStore)
+    finally:
+        auth_dependencies.get_auth_session_store.cache_clear()

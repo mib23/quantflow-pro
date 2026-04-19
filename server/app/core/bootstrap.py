@@ -4,6 +4,7 @@ import uuid
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 
+from sqlalchemy import inspect
 from sqlalchemy.exc import SQLAlchemyError
 
 from app.core.database import get_engine, get_session_factory
@@ -19,9 +20,20 @@ from app.modules.risk.seed import seed_default_risk_data
 
 def ensure_local_baseline() -> None:
     try:
-        from app.core.models import Base
+        engine = get_engine()
+        required_tables = {
+            "users",
+            "broker_accounts",
+            "account_balances",
+            "positions",
+            "risk_rules",
+            "risk_events",
+            "risk_rule_versions",
+        }
+        existing_tables = set(inspect(engine).get_table_names())
+        if not required_tables.issubset(existing_tables):
+            return
 
-        Base.metadata.create_all(get_engine())
         session_factory = get_session_factory()
         with session_factory() as session:
             existing_user = session.query(UserModel).filter(UserModel.email == "alex@quantflow.local").one_or_none()

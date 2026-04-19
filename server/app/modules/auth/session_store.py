@@ -40,8 +40,21 @@ class SessionStore(Protocol):
 
 
 class RedisSessionStore:
-    def __init__(self, redis_url: str) -> None:
-        self._client = Redis.from_url(redis_url)
+    def __init__(
+        self,
+        redis_url: str,
+        *,
+        socket_connect_timeout: float | None = None,
+        socket_timeout: float | None = None,
+    ) -> None:
+        self._client = Redis.from_url(
+            redis_url,
+            socket_connect_timeout=socket_connect_timeout,
+            socket_timeout=socket_timeout,
+        )
+
+    def ping(self) -> bool:
+        return bool(self._client.ping())
 
     def create_session(self, session: AuthSession) -> None:
         ttl_seconds = max(session.expires_at - int(datetime.now(UTC).timestamp()), 1)
